@@ -88,12 +88,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7.0.1
 
-      - name: Download architecture artifacts
+      - name: Download x64 artifact
         uses: actions/download-artifact@v8.0.1
         with:
-          pattern: ShutDown-app-*
-          merge-multiple: true
-          path: release
+          name: ShutDown-app-x64
+          path: release/app-x64
+
+      - name: Download x86 artifact
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: ShutDown-app-x86
+          path: release/app-x86
 
       - name: Verify release notes
         shell: pwsh

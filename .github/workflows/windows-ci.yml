@@ -47,7 +47,9 @@ jobs:
 
       - name: Test
         shell: pwsh
-        run: ctest --test-dir build -C Release --output-on-failure
+        run: |
+          $env:PATH = "$env:QT_ROOT_DIR/bin;$env:PATH"
+          ctest --test-dir build -C Release --output-on-failure --verbose
 
       - name: Package Windows application
         shell: pwsh

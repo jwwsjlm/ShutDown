@@ -21,6 +21,9 @@ int main() {
     if (SettingsStore::hasTask()) fail("clear task");
     ShutdownScheduler scheduler;
     std::wstring error;
+    // 空闲状态 tick 不应触发关机。
+    scheduler.tick();
+    if (scheduler.state() != ShutdownScheduler::State::Idle) fail("idle tick must remain idle");
     if (!scheduler.scheduleCountdown(10, false, false, &error)) fail("schedule countdown");
     if (!scheduler.isActive() || scheduler.remainingSeconds() <= 0) fail("scheduler active");
     scheduler.pause(); if (scheduler.state() != ShutdownScheduler::State::Paused) fail("pause");

@@ -118,6 +118,9 @@ void ShutdownScheduler::resume() {
 }
 
 void ShutdownScheduler::tick() {
+    // 空闲状态没有任务，不能因为 remainingSeconds()==0 而执行关机。
+    // 这是启动后定时器第一次触发时直接关机的根因。
+    if (!isActive()) return;
     if (m_state == State::Paused) {
         if (m_remainingCallback) m_remainingCallback(m_pausedRemaining);
         return;

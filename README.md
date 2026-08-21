@@ -12,7 +12,7 @@
 - `ExitWindowsEx` → `InitiateSystemShutdownEx` → `shutdown.exe` 三级执行
 - 可选 `schtasks.exe` 一次性系统任务兜底
 - 使用 `%APPDATA%\ShutDown\settings.ini` 保存任务状态
-- GitHub Release 更新检查、架构匹配、下载进度、SHA-256 校验和自动重启安装
+- Velopack 安装版自动更新、下载进度和重启安装
 
 ## 构建
 
@@ -47,32 +47,25 @@ PowerShell -ExecutionPolicy Bypass -File D:\code\ShutDown\scripts\build.ps1 -Arc
 
 ## 发布包
 
-发布采用 ZIP，而不是强行追求单文件。每个 ZIP 只包含：
-
-```text
-ShutDown.exe
-Win32xx-MIT.txt
-```
-
-GitHub Release 提供：
+GitHub Release 使用 Velopack 发布安装版和便携包：
 
 - `ShutDown-win-x64-Setup.exe`
 - `ShutDown-win-x86-Setup.exe`
 - `ShutDown-win-x64-Portable.zip`
 - `ShutDown-win-x86-Portable.zip`
-- `ShutDown-windows-x64.zip`
-- `ShutDown-windows-x86.zip`
+- `ShutDown-<version>-win-x64-full.nupkg`
+- `ShutDown-<version>-win-x86-full.nupkg`
+- `releases.win-x64.json` / `releases.win-x86.json`
 
 推荐使用 `Setup.exe` 安装版。安装版使用 Velopack 管理后续更新，会依据安装时的架构和 channel
 读取对应的 release feed，并由 Velopack 在程序退出后替换文件和重启。
 
-为了兼容旧版本迁移，Release 仍保留 `ShutDown-windows-x64.exe` / `ShutDown-windows-x86.exe`
-以及 ZIP 包；旧更新器会依据当前进程位数选择对应资产，不会让 32 位程序下载 x64 包。程序运行时不需要
-额外 GUI 框架 DLL、平台插件或 OpenSSL DLL。
+不再保留旧版自写更新器迁移资产；便携版或未通过 Velopack 安装的构建不会执行自动更新。
+程序运行时不需要额外 GUI 框架 DLL、平台插件或 OpenSSL DLL。
 
 ## GitHub Actions
 
-`.github/workflows/windows-ci.yml` 会分别构建 x64 和 x86，执行 CTest，并在推送 `v*` 标签时上传两个 ZIP 到 Release。
+`.github/workflows/windows-ci.yml` 会分别构建 x64 和 x86，执行 CTest，并在推送 `v*` 标签时生成 Velopack 安装器、便携包、nupkg 和 release feed。
 workflow 只负责编译、测试、打包和发布当前 tag，不会自动删除旧 Release、旧 tag 或历史版本。
 普通 push 到 `main` 不触发 CI；避免每次 release commit 产生额外的 `chore: release ...` run。
 

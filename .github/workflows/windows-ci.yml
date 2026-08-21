@@ -60,7 +60,7 @@ jobs:
         shell: pwsh
         run: ctest --test-dir build -C Release --output-on-failure --verbose
 
-      - name: Package Windows ZIP
+      - name: Stage app for Velopack
         shell: pwsh
         run: |
           $package = Join-Path $pwd "app-${{ matrix.arch }}"
@@ -68,22 +68,17 @@ jobs:
           $exe = Join-Path $pwd "build/Release/ShutDown.exe"
           Copy-Item $exe (Join-Path $package "ShutDown.exe") -Force
           Copy-Item (Join-Path $pwd "third_party/win32xx/license.txt") (Join-Path $package "Win32xx-MIT.txt") -Force
-          Copy-Item $exe (Join-Path $pwd "ShutDown-windows-${{ matrix.arch }}.exe") -Force
-          $archive = Join-Path $pwd "ShutDown-windows-${{ matrix.arch }}.zip"
-          Compress-Archive -Path (Join-Path $package '*') -DestinationPath $archive -Force
 
       - name: Upload architecture artifact
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: ShutDown-windows-${{ matrix.arch }}
+          name: ShutDown-app-${{ matrix.arch }}
           path: |
             app-${{ matrix.arch }}/
-            ShutDown-windows-${{ matrix.arch }}.exe
-            ShutDown-windows-${{ matrix.arch }}.zip
           if-no-files-found: error
 
   release:
-    name: Publish Windows ZIP release
+    name: Publish Windows Velopack release
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: windows-2022
@@ -96,7 +91,7 @@ jobs:
       - name: Download architecture artifacts
         uses: actions/download-artifact@v8.0.1
         with:
-          pattern: ShutDown-windows-*
+          pattern: ShutDown-app-*
           merge-multiple: true
           path: release
 
@@ -124,8 +119,4 @@ jobs:
           generate_release_notes: false
           body_path: release-notes/${{ github.ref_name }}.md
           files: |
-            release/ShutDown-windows-x64.exe
-            release/ShutDown-windows-x86.exe
-            release/ShutDown-windows-x64.zip
-            release/ShutDown-windows-x86.zip
             release/velopack/*

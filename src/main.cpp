@@ -23,7 +23,7 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     try {
         Velopack::VelopackApp::Build().Run();
     } catch (...) {
-        // Velopack startup hooks should never block the normal app in fallback/manual runs.
+        // Velopack startup hooks should never block the normal app.
     }
 #endif
     ShutdownApp app;

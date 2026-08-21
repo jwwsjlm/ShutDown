@@ -9,7 +9,6 @@
 #include <optional>
 #include <string>
 #include <thread>
-#include <vector>
 
 #ifdef SHUTDOWN_USE_VELOPACK
 #include "Velopack.hpp"
@@ -37,9 +36,6 @@ public:
     void cancelDownload();
     bool installAndRestart(const std::wstring &downloadedFile, std::wstring *errorMessage = nullptr) const;
 
-    static bool parseRelease(const std::string &object, UpdateInfo *info);
-    static bool parseReleasePage(const std::string &html, UpdateInfo *info);
-    static bool parseDescriptor(const std::string &object, UpdateInfo *info);
     static std::string normalizeVersion(const std::string &value);
     static std::string currentArchitectureToken();
 

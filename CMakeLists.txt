@@ -3,7 +3,7 @@ if (POLICY CMP0091)
     cmake_policy(SET CMP0091 NEW)
 endif()
 
-set(SHUTDOWN_BASE_VERSION 2.1.0)
+set(SHUTDOWN_BASE_VERSION 2.1.1)
 set(SHUTDOWN_VERSION_OVERRIDE "" CACHE STRING "Override version, normally passed by release CI from the git tag.")
 set(VELOPACK_ROOT "" CACHE PATH "Path to extracted velopack_libc package.")
 
@@ -62,7 +62,7 @@ set_source_files_properties("${SHUTDOWN_RC_FILE}" PROPERTIES
     OBJECT_DEPENDS "${SHUTDOWN_MANIFEST_FILE};${SHUTDOWN_ICON_FILE};${SHUTDOWN_RC_INCLUDE};${CMAKE_CURRENT_SOURCE_DIR}/resources/app.rc.in"
 )
 target_include_directories(ShutDown PRIVATE src third_party/win32xx/include)
-target_link_libraries(ShutDown PRIVATE win32xx::win32xx winhttp bcrypt comctl32 shell32 advapi32 user32 gdi32 ole32 uxtheme)
+target_link_libraries(ShutDown PRIVATE win32xx::win32xx comctl32 shell32 advapi32 user32 gdi32 ole32 uxtheme)
 if (MSVC AND VELOPACK_ROOT)
     if (CMAKE_SIZEOF_VOID_P EQUAL 8)
         set(VELOPACK_LIB "${VELOPACK_ROOT}/lib-static/velopack_libc_win_x64_msvc.lib")

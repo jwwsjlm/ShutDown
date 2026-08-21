@@ -2,7 +2,6 @@
 
 #include <cstdint>
 #include <string>
-#include <vector>
 
 struct PersistedTask {
     enum class Type { None, ScheduledAt, Countdown };
@@ -21,8 +20,5 @@ struct UpdateInfo {
     std::string notes;
     std::string assetName;
     std::string downloadUrl;
-    std::vector<std::string> mirrorUrls;
-    std::vector<unsigned char> sha256;
-
     bool isValid() const { return !version.empty() && !downloadUrl.empty(); }
 };

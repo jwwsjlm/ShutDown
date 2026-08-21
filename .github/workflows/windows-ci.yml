@@ -48,7 +48,14 @@ jobs:
       - name: Test
         shell: pwsh
         run: |
-          $env:PATH = "$env:QT_ROOT_DIR/bin;$env:PATH"
+          $qtBin = Join-Path $env:QT_ROOT_DIR "bin"
+          $env:PATH = "$qtBin;$env:PATH"
+          $testExe = Join-Path $pwd "build/tests/Release/ShutDownTests.exe"
+          Write-Host "Qt bin: $qtBin"
+          Write-Host "Test executable: $testExe"
+          if (-not (Test-Path $testExe)) { throw "Test executable not found" }
+          & $testExe -v2
+          if ($LASTEXITCODE -ne 0) { throw "Direct test execution failed with exit code $LASTEXITCODE" }
           ctest --test-dir build -C Release --output-on-failure --verbose
 
       - name: Package Windows application

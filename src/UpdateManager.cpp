@@ -92,7 +92,8 @@ void UpdateManager::checkForUpdates() {
     for (const auto &url : urls) {
         QNetworkRequest request(url);
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-        request.setRedirectPolicy(QNetworkRequest::NoLessSafeRedirectPolicy);
+        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                             QNetworkRequest::NoLessSafeRedirectPolicy);
 #else
         request.setAttribute(QNetworkRequest::FollowRedirectsAttribute, true);
 #endif
@@ -220,7 +221,8 @@ void UpdateManager::startNextDownload() {
     }
     QNetworkRequest request(url);
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-    request.setRedirectPolicy(QNetworkRequest::NoLessSafeRedirectPolicy);
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                         QNetworkRequest::NoLessSafeRedirectPolicy);
 #else
     request.setAttribute(QNetworkRequest::FollowRedirectsAttribute, true);
 #endif

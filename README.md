@@ -35,6 +35,9 @@ ctest --test-dir D:\code\ShutDown\build -C Release --output-on-failure
 PowerShell -ExecutionPolicy Bypass -File D:\code\ShutDown\scripts\build.ps1 -Test
 ```
 
+脚本使用 UTF-8 编码，并会优先使用 Qt 安装目录中的 `Tools\CMake_64`，因此可直接
+在 Windows PowerShell 5.1 中运行，不会因为中文提示或 CMake 未加入 `PATH` 而失败。
+
 ## GitHub Actions
 
 `.github/workflows/windows-ci.yml` 会在 Push、Pull Request 和 `v*` 标签时自动执行：

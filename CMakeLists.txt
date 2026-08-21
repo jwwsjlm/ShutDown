@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(ShutDown VERSION 1.0.1 LANGUAGES CXX)
+project(ShutDown VERSION 1.0.7 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -46,6 +46,16 @@ add_executable(ShutDown WIN32
 target_link_libraries(ShutDown PRIVATE Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Network)
 target_include_directories(ShutDown PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_definitions(ShutDown PRIVATE SHUTDOWN_VERSION="${PROJECT_VERSION}")
+
+# All user-facing strings in the Qt UI are UTF-8.  MSVC otherwise uses the
+# active Windows code page for source files without a BOM, which turns Chinese
+# string literals into mojibake in the packaged Windows build.  Keep both the
+# input and execution character sets explicit for every supported toolchain.
+if (MSVC)
+    target_compile_options(ShutDown PRIVATE /utf-8)
+elseif (MINGW)
+    target_compile_options(ShutDown PRIVATE -finput-charset=UTF-8 -fexec-charset=UTF-8)
+endif()
 
 if (WIN32)
     target_compile_definitions(ShutDown PRIVATE

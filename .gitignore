@@ -1,0 +1,10 @@
+/build/
+/package/
+/.vs/
+/.vscode/
+*.user
+*.suo
+*.log
+*.pdb
+*.obj
+*.ilk

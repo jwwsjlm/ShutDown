@@ -91,7 +91,11 @@ void UpdateManager::checkForUpdates() {
 
     for (const auto &url : urls) {
         QNetworkRequest request(url);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+        request.setRedirectPolicy(QNetworkRequest::NoLessSafeRedirectPolicy);
+#else
         request.setAttribute(QNetworkRequest::FollowRedirectsAttribute, true);
+#endif
         request.setHeader(QNetworkRequest::UserAgentHeader, QString::fromLatin1(kUserAgent));
         request.setRawHeader("Accept", "application/vnd.github+json");
         auto *reply = m_network.get(request);
@@ -215,7 +219,11 @@ void UpdateManager::startNextDownload() {
         return;
     }
     QNetworkRequest request(url);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    request.setRedirectPolicy(QNetworkRequest::NoLessSafeRedirectPolicy);
+#else
     request.setAttribute(QNetworkRequest::FollowRedirectsAttribute, true);
+#endif
     request.setHeader(QNetworkRequest::UserAgentHeader, QString::fromLatin1(kUserAgent));
     m_downloadReply = m_network.get(request);
     connect(m_downloadReply, &QNetworkReply::readyRead, this, [this] {

@@ -39,7 +39,7 @@ PowerShell -ExecutionPolicy Bypass -File D:\code\ShutDown\scripts\build.ps1 -Tes
 
 `.github/workflows/windows-ci.yml` 会在 Push、Pull Request 和 `v*` 标签时自动执行：
 
-- 安装 Qt 6.5.x MSVC 2019 64-bit
+- 安装 Qt 5.15.2 MSVC 2019 64-bit
 - 使用 Visual Studio 2022 编译
 - 运行 CTest
 - 使用 `windeployqt` 打包并上传 Windows x64 artifact
@@ -55,7 +55,7 @@ PowerShell -ExecutionPolicy Bypass -File D:\code\ShutDown\scripts\build.ps1 -Tes
 工作流当前固定使用已验证的 action 版本：
 
 - `actions/checkout@v7.0.1`
-- `jurplel/install-qt-action@v4.3.1`
+- `jurplel/install-qt-action@v4.3.1`（Qt 5.15.2）
 - `actions/upload-artifact@v7.0.1`
 
 部署时执行 Qt 对应版本的 `windeployqt.exe ShutDown.exe`。系统任务和关机 API 可能受本机组策略、UAC、域策略或未保存应用阻止；“强制关闭”应谨慎启用。

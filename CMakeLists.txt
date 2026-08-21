@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(ShutDown VERSION 1.0.0 LANGUAGES CXX)
+project(ShutDown VERSION 1.0.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -48,7 +48,10 @@ target_include_directories(ShutDown PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_definitions(ShutDown PRIVATE SHUTDOWN_VERSION="${PROJECT_VERSION}")
 
 if (WIN32)
-    target_compile_definitions(ShutDown PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_compile_definitions(ShutDown PRIVATE
+        UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN
+        WINVER=0x0601 _WIN32_WINNT=0x0601
+    )
     target_link_libraries(ShutDown PRIVATE advapi32 user32 shell32)
 endif()
 

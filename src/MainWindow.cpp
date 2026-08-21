@@ -50,11 +50,15 @@ std::time_t parseDate(const std::wstring &value) {
     return static_cast<std::time_t>(value64.QuadPart / 10000000ULL - 11644473600ULL);
 }
 
-std::wstring currentPlusHour() {
-    const auto target = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()) + 3600;
+std::wstring formatDateTime(std::time_t target) {
     std::tm local{}; localtime_s(&local, &target); wchar_t buffer[64]{};
     swprintf_s(buffer, 64, L"%04d-%02d-%02d %02d:%02d:%02d", local.tm_year + 1900, local.tm_mon + 1, local.tm_mday, local.tm_hour, local.tm_min, local.tm_sec);
     return buffer;
+}
+
+std::wstring currentPlusHour() {
+    const auto target = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()) + 3600;
+    return formatDateTime(target);
 }
 }
 
@@ -161,7 +165,27 @@ void MainWindow::scheduleAt() {
 
 void MainWindow::scheduleCountdown() {
     const auto h = _wtoi(text(m_hours).c_str()), m = _wtoi(text(m_minutes).c_str()), s = _wtoi(text(m_seconds).c_str());
-    std::wstring error; if (!m_scheduler.scheduleCountdown(static_cast<std::int64_t>(h) * 3600 + m * 60 + s, isChecked(m_force), isChecked(m_fallback), &error)) ::MessageBoxW(GetHwnd(), error.c_str(), L"设置失败", MB_OK | MB_ICONWARNING);
+    const std::int64_t seconds = static_cast<std::int64_t>(h) * 3600 + m * 60 + s;
+    if (seconds <= 0) {
+        ::MessageBoxW(GetHwnd(), L"倒计时必须大于 0 秒。", L"设置失败", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    if (seconds <= 10 * 60) {
+        const int answer = ::MessageBoxW(
+            GetHwnd(),
+            L"当前倒计时距离关机只有 10 分钟以内，确认输入的日期/倒计时无误吗？",
+            L"确认定时关机",
+            MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
+        if (answer != IDYES) return;
+    }
+    std::wstring error;
+    if (!m_scheduler.scheduleCountdown(seconds, isChecked(m_force), isChecked(m_fallback), &error)) {
+        ::MessageBoxW(GetHwnd(), error.c_str(), L"设置失败", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    // 倒计时启动后，把预计关机时刻同步显示到上方日期框，方便核对。
+    const auto target = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()) + seconds;
+    setText(m_dateEdit, formatDateTime(target));
 }
 
 void MainWindow::cancelTask() { m_scheduler.cancel(); }

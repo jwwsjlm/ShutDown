@@ -1,0 +1,97 @@
+name: build
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
+    branches:
+      - "**"
+
+# Semantic version layout for releases and tags:
+#   WIN32XX_VERSION  base 3-component release version, e.g. 9.6.1
+#   build tag/release
+#                    v9.6.1.{run_number}  immutable, full four-component version
+#   FLOATING_TAG     v9.6.1               floating 3-component tag and release
+#                                         alias for the latest build tag/release
+env:
+  WIN32XX_VERSION: 9.6.1
+  FLOATING_TAG: v9.6.1
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+
+      - name: configure
+        run: |
+          cmake -S . -B build \
+            -DWIN32XX_VERSION=${WIN32XX_VERSION}.${{ github.run_number }}
+
+      - name: verify local target
+        run: |
+          mkdir -p smoke
+          cat > smoke/CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.20)
+          project(win32xx_smoke LANGUAGES CXX)
+          include(FetchContent)
+          FetchContent_Declare(
+                  win32xx
+                  SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/..")
+          FetchContent_MakeAvailable(win32xx)
+          add_library(consumer INTERFACE)
+          target_link_libraries(consumer INTERFACE win32xx::win32xx)
+          EOF
+          cmake -S smoke -B smoke-build
+
+  release:
+    needs: build
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: publish versioned build and floating aliases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # 1. Resolve the semantic version for this build (major.minor.patch.build)
+          BUILD_VERSION="${WIN32XX_VERSION}.${GITHUB_RUN_NUMBER}"
+          BUILD_TAG="v${BUILD_VERSION}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # 2. Publish the immutable versioned tag and its pinnable release.
+          git tag "${BUILD_TAG}" "${GITHUB_SHA}"
+          git push origin "refs/tags/${BUILD_TAG}"
+
+          gh release create "${BUILD_TAG}" \
+            --title "${BUILD_TAG}" \
+            --latest \
+            --notes "Automated FetchContent-only Win32++ ${BUILD_VERSION} build ${GITHUB_RUN_NUMBER}."
+
+          # 3. Re-point the floating tag alias to this build.
+          gh release delete "${FLOATING_TAG}" --yes || true
+          git push origin ":refs/tags/${FLOATING_TAG}" || true
+
+          git tag -f "${FLOATING_TAG}" "${GITHUB_SHA}"
+          git push origin "refs/tags/${FLOATING_TAG}"
+
+          # 4. Re-create the floating release alias pointing at the latest build.
+          gh release create "${FLOATING_TAG}" \
+            --title "${FLOATING_TAG}" \
+            --latest=false \
+            --notes "Floating Win32++ ${WIN32XX_VERSION} release. Always points to the latest build (${BUILD_TAG})."

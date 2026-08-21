@@ -1,84 +1,48 @@
 #pragma once
 
-#include <QNetworkAccessManager>
-#include <QNetworkReply>
-#include <QObject>
-#include <QMetaType>
-#include <QUrl>
-#include <QByteArray>
-#include <QList>
-#include <QString>
+#include "NativeTypes.h"
 
-class QFile;
-class QJsonObject;
-class UpdateManagerTest;
+#include <atomic>
+#include <cstdint>
+#include <functional>
+#include <string>
+#include <thread>
+#include <vector>
 
-struct UpdateInfo {
-    QString version;
-    QString tagName;
-    QString title;
-    QString notes;
-    QString assetName;
-    QUrl downloadUrl;
-    QList<QUrl> mirrorUrls;
-    QByteArray sha256;
-
-    bool isValid() const { return !version.isEmpty() && downloadUrl.isValid(); }
-};
-
-Q_DECLARE_METATYPE(UpdateInfo)
-
-class UpdateManager final : public QObject {
-    Q_OBJECT
-    friend class UpdateManagerTest;
+class UpdateManager {
 public:
-    explicit UpdateManager(QObject *parent = nullptr);
+    struct Callbacks {
+        std::function<void()> checkingStarted;
+        std::function<void()> checkingFinished;
+        std::function<void(const UpdateInfo &)> updateAvailable;
+        std::function<void()> noUpdateAvailable;
+        std::function<void(const std::wstring &)> checkError;
+        std::function<void(std::int64_t, std::int64_t)> downloadProgress;
+        std::function<void(const std::wstring &)> downloadFinished;
+        std::function<void(const std::wstring &)> downloadError;
+    };
 
+    explicit UpdateManager(std::string currentVersion);
+    ~UpdateManager();
+
+    void setCallbacks(Callbacks callbacks) { m_callbacks = std::move(callbacks); }
     void checkForUpdates();
     void downloadUpdate(const UpdateInfo &info);
     void cancelDownload();
-    bool installAndRestart(const QString &downloadedFile, QString *errorMessage = nullptr) const;
+    bool installAndRestart(const std::wstring &downloadedFile, std::wstring *errorMessage = nullptr) const;
 
-signals:
-    void checkingStarted(int requestCount);
-    void checkingFinished();
-    void updateAvailable(const UpdateInfo &info);
-    void noUpdateAvailable();
-    void checkError(const QString &message);
-    void downloadProgress(qint64 bytesReceived, qint64 bytesTotal);
-    void downloadFinished(const QString &filePath);
-    void downloadError(const QString &message);
+    static bool parseRelease(const std::string &object, UpdateInfo *info);
+    static bool parseDescriptor(const std::string &object, UpdateInfo *info);
+    static std::string normalizeVersion(const std::string &value);
+    static std::string currentArchitectureToken();
 
 private:
-    struct CheckResult {
-        UpdateInfo info;
-        QString source;
-    };
+    void joinWorker();
+    bool isNewerThanCurrent(const std::string &version) const;
+    std::string currentVersion() const { return m_currentVersion; }
 
-    QList<QUrl> checkUrls() const;
-    QList<QUrl> downloadUrls(const UpdateInfo &info) const;
-    bool parseResponse(const QByteArray &data, const QString &source, UpdateInfo *info) const;
-    bool parseRelease(const QJsonObject &object, UpdateInfo *info) const;
-    bool parseDescriptor(const QJsonObject &object, UpdateInfo *info) const;
-    void finishChecking();
-    void startNextDownload();
-    bool verifyDownloadedFile(const QString &path, const QByteArray &expectedSha256) const;
-    static QString currentArchitectureToken();
-    static QString normalizeVersion(const QString &value);
-    static bool isNewerThanCurrent(const QString &version);
-
-    QNetworkAccessManager m_network;
-    QHash<QNetworkReply *, QString> m_checkReplies;
-    QList<CheckResult> m_checkResults;
-    QStringList m_checkErrors;
-    int m_completedChecks = 0;
-    int m_totalChecks = 0;
-    int m_successfulChecks = 0;
-
-    UpdateInfo m_downloadInfo;
-    QList<QUrl> m_downloadCandidates;
-    int m_downloadIndex = 0;
-    QNetworkReply *m_downloadReply = nullptr;
-    QFile *m_downloadFile = nullptr;
-    QString m_downloadPath;
+    std::string m_currentVersion;
+    Callbacks m_callbacks;
+    std::thread m_worker;
+    std::atomic<bool> m_cancel{false};
 };

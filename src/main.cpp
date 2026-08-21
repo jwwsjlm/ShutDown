@@ -1,40 +1,33 @@
-#include "MainWindow.h"
 #include "AppLogger.h"
+#include "MainWindow.h"
 
-#include <QApplication>
-#include <QDir>
-#include <QFont>
-#include <QLockFile>
-#include <QMessageBox>
-#include <QStandardPaths>
+#include <windows.h>
+#include <commctrl.h>
+#include <shellapi.h>
+
+#include <filesystem>
+#include <string>
 
 #ifndef SHUTDOWN_VERSION
 #define SHUTDOWN_VERSION "0.0.0-dev"
 #endif
 
-int main(int argc, char *argv[]) {
-    QApplication app(argc, argv);
-#ifdef Q_OS_WIN
-    // Prefer a Windows font with complete Simplified Chinese glyph coverage.
-    // Qt still falls back automatically when the font is unavailable.
-    QFont uiFont = app.font();
-    uiFont.setFamily(QStringLiteral("Microsoft YaHei UI"));
-    app.setFont(uiFont);
-#endif
-    QApplication::setApplicationName(QStringLiteral("ShutDown"));
-    QApplication::setApplicationVersion(QStringLiteral(SHUTDOWN_VERSION));
-    QApplication::setOrganizationName(QStringLiteral("ShutDown"));
-    AppLogger::initialize();
+class ShutdownApp final : public Win32xx::CWinApp {};
 
-    const QString lockPath = QStandardPaths::writableLocation(QStandardPaths::TempLocation) + QStringLiteral("/ShutDown.lock");
-    QLockFile lock(lockPath);
-    lock.setStaleLockTime(30000);
-    if (!lock.tryLock(100)) {
-        QMessageBox::information(nullptr, QStringLiteral("定时关机"), QStringLiteral("程序已经在运行。"));
+int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
+    ShutdownApp app;
+    INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_STANDARD_CLASSES | ICC_PROGRESS_CLASS};
+    InitCommonControlsEx(&controls);
+    AppLogger::initialize();
+    const auto mutex = CreateMutexW(nullptr, TRUE, L"Local\\ShutDown.SingleInstance");
+    if (!mutex || GetLastError() == ERROR_ALREADY_EXISTS) {
+        MessageBoxW(nullptr, L"程序已经在运行。", L"定时关机", MB_OK | MB_ICONINFORMATION);
+        if (mutex) CloseHandle(mutex);
         return 0;
     }
-
-    MainWindow window;
-    window.show();
-    return app.exec();
+    MainWindow window(SHUTDOWN_VERSION);
+    app.SetMainWnd(window.CreateMain());
+    const int result = app.Run();
+    CloseHandle(mutex);
+    return result;
 }

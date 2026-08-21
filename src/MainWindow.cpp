@@ -1,312 +1,219 @@
 #include "MainWindow.h"
 
+#include "AppLogger.h"
 #include "SettingsStore.h"
 #include "ShutdownExecutor.h"
 
-#include <QApplication>
-#include <QCheckBox>
-#include <QCloseEvent>
-#include <QDateTime>
-#include <QDateTimeEdit>
-#include <QEvent>
-#include <QFormLayout>
-#include <QGroupBox>
-#include <QHBoxLayout>
-#include <QLabel>
-#include <QMenu>
-#include <QMessageBox>
-#include <QPushButton>
-#include <QProgressBar>
-#include <QSpinBox>
-#include <QSystemTrayIcon>
-#include <QStyle>
-#include <QTimer>
-#include <QVBoxLayout>
+#include <commctrl.h>
+#include <shellapi.h>
+#include <windows.h>
 
-MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
-    setWindowTitle(QStringLiteral("定时关机"));
-    setMinimumSize(480, 360);
-    buildUi();
-    buildTray();
-    connect(&m_scheduler, &ShutdownScheduler::remainingChanged, this, &MainWindow::updateRemaining);
-    connect(&m_scheduler, &ShutdownScheduler::stateChanged, this, &MainWindow::updateState);
-    connect(&m_scheduler, &ShutdownScheduler::executionError, this, [this](const QString &message) {
-        QMessageBox::critical(this, QStringLiteral("关机失败"), message);
-    });
-    connect(&m_updateManager, &UpdateManager::updateAvailable, this, &MainWindow::handleUpdateAvailable);
-    connect(&m_updateManager, &UpdateManager::noUpdateAvailable, this, &MainWindow::handleNoUpdateAvailable);
-    connect(&m_updateManager, &UpdateManager::checkError, this, &MainWindow::handleUpdateCheckError);
-    connect(&m_updateManager, &UpdateManager::downloadProgress, this, &MainWindow::handleDownloadProgress);
-    connect(&m_updateManager, &UpdateManager::downloadFinished, this, &MainWindow::handleDownloadFinished);
-    connect(&m_updateManager, &UpdateManager::downloadError, this, &MainWindow::handleDownloadError);
-    restorePersistedTask();
-    QTimer::singleShot(3000, this, [this] {
-        m_silentUpdateCheck = true;
-        m_updateManager.checkForUpdates();
-    });
+#include <algorithm>
+#include <chrono>
+#include <memory>
+#include <sstream>
+
+#pragma comment(lib, "comctl32.lib")
+#pragma comment(lib, "shell32.lib")
+
+namespace {
+enum : int {
+    IDC_DATE = 1001, IDC_HOURS, IDC_MINUTES, IDC_SECONDS, IDC_FORCE, IDC_FALLBACK,
+    IDC_AT, IDC_COUNTDOWN, IDC_PAUSE, IDC_CANCEL, IDC_NOW, IDC_CHECK, IDC_PROGRESS,
+    IDC_STATUS, IDC_REMAINING, ID_TRAY_SHOW = 2001, ID_TRAY_CANCEL, ID_TRAY_CHECK,
+    ID_TRAY_NOW, ID_TRAY_EXIT
+};
+constexpr UINT WM_TRAY = WM_APP + 10;
+constexpr UINT WM_UI_EVENT = WM_APP + 11;
+constexpr UINT TIMER_SCHEDULER = 1;
+constexpr UINT TIMER_AUTO_UPDATE = 2;
+
+HWND control(DWORD exStyle, LPCWSTR cls, LPCWSTR title, DWORD style, int x, int y, int w, int h, HWND parent, int id) {
+    return CreateWindowExW(exStyle, cls, title, style, x, y, w, h, parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), GetModuleHandleW(nullptr), nullptr);
 }
 
-MainWindow::~MainWindow() = default;
+void setFont(HWND hwnd, HFONT font) { SendMessageW(hwnd, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE); }
 
-void MainWindow::buildUi() {
-    auto *central = new QWidget(this);
-    auto *root = new QVBoxLayout(central);
-
-    auto *atGroup = new QGroupBox(QStringLiteral("指定日期和时间"), central);
-    auto *atLayout = new QFormLayout(atGroup);
-    m_dateTimeEdit = new QDateTimeEdit(QDateTime::currentDateTime().addSecs(3600), atGroup);
-    m_dateTimeEdit->setCalendarPopup(true);
-    m_dateTimeEdit->setDisplayFormat(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
-    atLayout->addRow(QStringLiteral("关机时间:"), m_dateTimeEdit);
-    auto *atButton = new QPushButton(QStringLiteral("设置定时关机"), atGroup);
-    atLayout->addRow(nullptr, atButton);
-    connect(atButton, &QPushButton::clicked, this, &MainWindow::scheduleAt);
-
-    auto *countGroup = new QGroupBox(QStringLiteral("倒计时关机"), central);
-    auto *countLayout = new QFormLayout(countGroup);
-    auto makeSpin = [countGroup](int max) {
-        auto *spin = new QSpinBox(countGroup);
-        spin->setRange(0, max);
-        return spin;
-    };
-    m_hours = makeSpin(999);
-    m_minutes = makeSpin(59);
-    m_seconds = makeSpin(59);
-    auto *timeRow = new QWidget(countGroup);
-    auto *timeLayout = new QHBoxLayout(timeRow);
-    timeLayout->setContentsMargins(0, 0, 0, 0);
-    timeLayout->addWidget(m_hours); timeLayout->addWidget(new QLabel(QStringLiteral("小时"), timeRow));
-    timeLayout->addWidget(m_minutes); timeLayout->addWidget(new QLabel(QStringLiteral("分钟"), timeRow));
-    timeLayout->addWidget(m_seconds); timeLayout->addWidget(new QLabel(QStringLiteral("秒"), timeRow));
-    countLayout->addRow(QStringLiteral("时长:"), timeRow);
-    auto *countButton = new QPushButton(QStringLiteral("开始倒计时"), countGroup);
-    countLayout->addRow(nullptr, countButton);
-    connect(countButton, &QPushButton::clicked, this, &MainWindow::scheduleCountdown);
-
-    auto *options = new QGroupBox(QStringLiteral("选项"), central);
-    auto *optionsLayout = new QVBoxLayout(options);
-    m_force = new QCheckBox(QStringLiteral("强制关闭应用（可能丢失未保存数据）"), options);
-    m_fallback = new QCheckBox(QStringLiteral("启用 Task Scheduler 系统兜底"), options);
-    optionsLayout->addWidget(m_force); optionsLayout->addWidget(m_fallback);
-
-    auto *statusGroup = new QGroupBox(QStringLiteral("当前任务"), central);
-    auto *statusLayout = new QFormLayout(statusGroup);
-    m_status = new QLabel(QStringLiteral("空闲"), statusGroup);
-    m_remaining = new QLabel(QStringLiteral("--"), statusGroup);
-    statusLayout->addRow(QStringLiteral("状态:"), m_status);
-    statusLayout->addRow(QStringLiteral("剩余时间:"), m_remaining);
-
-    auto *buttons = new QHBoxLayout;
-    m_pauseButton = new QPushButton(QStringLiteral("暂停"), central);
-    auto *cancelButton = new QPushButton(QStringLiteral("取消任务"), central);
-    auto *nowButton = new QPushButton(QStringLiteral("立即关机"), central);
-    buttons->addWidget(m_pauseButton); buttons->addWidget(cancelButton); buttons->addWidget(nowButton);
-    m_pauseButton->setEnabled(false);
-    connect(m_pauseButton, &QPushButton::clicked, this, &MainWindow::togglePause);
-    connect(cancelButton, &QPushButton::clicked, this, &MainWindow::cancelTask);
-    connect(nowButton, &QPushButton::clicked, this, &MainWindow::executeNow);
-
-    root->addWidget(atGroup); root->addWidget(countGroup); root->addWidget(options); root->addWidget(statusGroup); root->addLayout(buttons);
-    addUpdateControls(root);
-    setCentralWidget(central);
+std::wstring numberText(HWND hwnd) {
+    wchar_t buffer[64]{}; GetWindowTextW(hwnd, buffer, 64); return buffer;
 }
 
-void MainWindow::addUpdateControls(QVBoxLayout *root) {
-    auto *updateGroup = new QGroupBox(QStringLiteral("软件更新"), this);
-    auto *layout = new QVBoxLayout(updateGroup);
-    auto *row = new QHBoxLayout;
-    m_checkUpdateButton = new QPushButton(QStringLiteral("检查更新"), updateGroup);
-    m_updateProgress = new QProgressBar(updateGroup);
-    m_updateProgress->setRange(0, 100);
-    m_updateProgress->setValue(0);
-    m_updateProgress->setTextVisible(true);
-    m_updateProgress->setFormat(QStringLiteral("未下载更新"));
-    row->addWidget(m_checkUpdateButton);
-    row->addWidget(m_updateProgress, 1);
-    layout->addLayout(row);
-    connect(m_checkUpdateButton, &QPushButton::clicked, this, &MainWindow::checkForUpdates);
-    root->addWidget(updateGroup);
+std::time_t parseDate(const std::wstring &value) {
+    SYSTEMTIME st{}; int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
+    if (swscanf_s(value.c_str(), L"%d-%d-%d %d:%d:%d", &year, &month, &day, &hour, &minute, &second) != 6) return 0;
+    st.wYear = static_cast<WORD>(year); st.wMonth = static_cast<WORD>(month); st.wDay = static_cast<WORD>(day);
+    st.wHour = static_cast<WORD>(hour); st.wMinute = static_cast<WORD>(minute); st.wSecond = static_cast<WORD>(second);
+    FILETIME ft{}; if (!SystemTimeToFileTime(&st, &ft)) return 0;
+    ULARGE_INTEGER value64{}; value64.LowPart = ft.dwLowDateTime; value64.HighPart = ft.dwHighDateTime;
+    return static_cast<std::time_t>(value64.QuadPart / 10000000ULL - 11644473600ULL);
 }
 
-void MainWindow::buildTray() {
-    if (!QSystemTrayIcon::isSystemTrayAvailable()) return;
-    m_tray = new QSystemTrayIcon(QApplication::style()->standardIcon(QStyle::SP_ComputerIcon), this);
-    m_tray->setToolTip(QStringLiteral("定时关机"));
-    m_trayMenu = new QMenu(this);
-    m_showAction = m_trayMenu->addAction(QStringLiteral("显示窗口"), this, &MainWindow::showFromTray);
-    m_cancelAction = m_trayMenu->addAction(QStringLiteral("取消任务"), this, &MainWindow::cancelTask);
-    m_checkUpdateAction = m_trayMenu->addAction(QStringLiteral("检查更新"), this, &MainWindow::checkForUpdates);
-    m_trayMenu->addAction(QStringLiteral("立即关机"), this, &MainWindow::executeNow);
-    m_trayMenu->addSeparator();
-    m_trayMenu->addAction(QStringLiteral("退出"), this, [this] {
-        m_forceQuit = true;
-        qApp->quit();
-    });
-    m_tray->setContextMenu(m_trayMenu);
-    m_cancelAction->setEnabled(false);
-    connect(m_tray, &QSystemTrayIcon::activated, this, &MainWindow::trayActivated);
-    m_tray->show();
+std::wstring currentPlusHour() {
+    const auto target = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()) + 3600;
+    std::tm local{}; localtime_s(&local, &target); wchar_t buffer[64]{};
+    swprintf_s(buffer, 64, L"%04d-%02d-%02d %02d:%02d:%02d", local.tm_year + 1900, local.tm_mon + 1, local.tm_mday, local.tm_hour, local.tm_min, local.tm_sec);
+    return buffer;
 }
+}
+
+MainWindow::MainWindow(std::string version) : m_updateManager(std::move(version)) {
+    m_scheduler.setStateCallback([this](ShutdownScheduler::State state) { updateState(state); });
+    m_scheduler.setRemainingCallback([this](std::int64_t seconds) { updateRemaining(seconds); });
+    m_scheduler.setErrorCallback([this](const std::wstring &message) { MessageBoxW(GetHwnd(), message.c_str(), L"关机失败", MB_ICONERROR); });
+    UpdateManager::Callbacks callbacks;
+    callbacks.updateAvailable = [this](const UpdateInfo &info) { auto *event = new UiEvent{UiEvent::Type::UpdateAvailable}; event->info = info; post(event); };
+    callbacks.noUpdateAvailable = [this] { post(new UiEvent{UiEvent::Type::NoUpdate}); };
+    callbacks.checkError = [this](const std::wstring &text) { auto *event = new UiEvent{UiEvent::Type::CheckError}; event->text = text; post(event); };
+    callbacks.downloadProgress = [this](std::int64_t r, std::int64_t t) { auto *event = new UiEvent{UiEvent::Type::DownloadProgress}; event->received = r; event->total = t; post(event); };
+    callbacks.downloadFinished = [this](const std::wstring &path) { auto *event = new UiEvent{UiEvent::Type::DownloadFinished}; event->text = path; post(event); };
+    callbacks.downloadError = [this](const std::wstring &text) { auto *event = new UiEvent{UiEvent::Type::DownloadError}; event->text = text; post(event); };
+    m_updateManager.setCallbacks(std::move(callbacks));
+}
+
+MainWindow::~MainWindow() { destroyTray(); if (m_font) DeleteObject(m_font); }
+
+void MainWindow::PreRegisterClass(WNDCLASS &wc) {
+    wc.lpszClassName = L"ShutDown.Win32xx.MainWindow";
+    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
+}
+
+void MainWindow::PreCreate(CREATESTRUCT &cs) {
+    cs.style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
+    cs.x = CW_USEDEFAULT; cs.y = CW_USEDEFAULT; cs.cx = 520; cs.cy = 560;
+    cs.lpszName = L"定时关机";
+}
+
+HWND MainWindow::CreateMain() { return Create(); }
+
+int MainWindow::OnCreate(CREATESTRUCT &) {
+    m_font = CreateFontW(-18, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
+    createControls(); createTray(); restorePersistedTask();
+    SetTimer(GetHwnd(), TIMER_SCHEDULER, 1000, nullptr);
+    SetTimer(GetHwnd(), TIMER_AUTO_UPDATE, 3000, nullptr);
+    return 0;
+}
+
+void MainWindow::createControls() {
+    const int left = 18, width = 480;
+    auto *groupAt = control(0, L"BUTTON", L"指定日期和时间", BS_GROUPBOX | WS_CHILD | WS_VISIBLE, left, 10, width, 95, GetHwnd(), 0);
+    auto *labelAt = control(0, L"STATIC", L"关机时间:", WS_CHILD | WS_VISIBLE, 35, 40, 80, 24, GetHwnd(), 0);
+    m_dateEdit = control(WS_EX_CLIENTEDGE, L"EDIT", currentPlusHour().c_str(), WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 120, 37, 210, 28, GetHwnd(), IDC_DATE);
+    auto *atButton = control(0, L"BUTTON", L"设置定时关机", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 340, 36, 130, 30, GetHwnd(), IDC_AT);
+    auto *groupCount = control(0, L"BUTTON", L"倒计时关机", BS_GROUPBOX | WS_CHILD | WS_VISIBLE, left, 115, width, 100, GetHwnd(), 0);
+    control(0, L"STATIC", L"时长:", WS_CHILD | WS_VISIBLE, 35, 145, 50, 24, GetHwnd(), 0);
+    m_hours = control(WS_EX_CLIENTEDGE, L"EDIT", L"0", WS_CHILD | WS_VISIBLE | ES_NUMBER, 90, 142, 55, 28, GetHwnd(), IDC_HOURS);
+    m_minutes = control(WS_EX_CLIENTEDGE, L"EDIT", L"0", WS_CHILD | WS_VISIBLE | ES_NUMBER, 170, 142, 55, 28, GetHwnd(), IDC_MINUTES);
+    m_seconds = control(WS_EX_CLIENTEDGE, L"EDIT", L"0", WS_CHILD | WS_VISIBLE | ES_NUMBER, 250, 142, 55, 28, GetHwnd(), IDC_SECONDS);
+    control(0, L"STATIC", L"时", WS_CHILD | WS_VISIBLE, 148, 145, 20, 24, GetHwnd(), 0);
+    control(0, L"STATIC", L"分", WS_CHILD | WS_VISIBLE, 228, 145, 20, 24, GetHwnd(), 0);
+    control(0, L"STATIC", L"秒", WS_CHILD | WS_VISIBLE, 308, 145, 20, 24, GetHwnd(), 0);
+    auto *countButton = control(0, L"BUTTON", L"开始倒计时", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 340, 141, 130, 30, GetHwnd(), IDC_COUNTDOWN);
+    auto *groupOptions = control(0, L"BUTTON", L"选项", BS_GROUPBOX | WS_CHILD | WS_VISIBLE, left, 225, width, 75, GetHwnd(), 0);
+    m_force = control(0, L"BUTTON", L"强制关闭应用（可能丢失未保存数据）", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 35, 248, 300, 24, GetHwnd(), IDC_FORCE);
+    m_fallback = control(0, L"BUTTON", L"启用 Task Scheduler 系统兜底", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 35, 273, 260, 24, GetHwnd(), IDC_FALLBACK);
+    auto *groupStatus = control(0, L"BUTTON", L"当前任务", BS_GROUPBOX | WS_CHILD | WS_VISIBLE, left, 310, width, 75, GetHwnd(), 0);
+    control(0, L"STATIC", L"状态:", WS_CHILD | WS_VISIBLE, 35, 333, 60, 24, GetHwnd(), 0);
+    m_status = control(0, L"STATIC", L"空闲", WS_CHILD | WS_VISIBLE, 100, 333, 160, 24, GetHwnd(), IDC_STATUS);
+    control(0, L"STATIC", L"剩余时间:", WS_CHILD | WS_VISIBLE, 280, 333, 80, 24, GetHwnd(), 0);
+    m_remaining = control(0, L"STATIC", L"--", WS_CHILD | WS_VISIBLE, 365, 333, 100, 24, GetHwnd(), IDC_REMAINING);
+    m_pause = control(0, L"BUTTON", L"暂停", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_DISABLED, 35, 400, 105, 32, GetHwnd(), IDC_PAUSE);
+    control(0, L"BUTTON", L"取消任务", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 155, 400, 105, 32, GetHwnd(), IDC_CANCEL);
+    control(0, L"BUTTON", L"立即关机", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 275, 400, 105, 32, GetHwnd(), IDC_NOW);
+    m_checkUpdate = control(0, L"BUTTON", L"检查更新", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 35, 455, 120, 32, GetHwnd(), IDC_CHECK);
+    m_progress = control(0, PROGRESS_CLASSW, L"", WS_CHILD | WS_VISIBLE, 165, 457, 300, 28, GetHwnd(), IDC_PROGRESS);
+    SendMessageW(m_progress, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
+    for (HWND child : {groupAt, labelAt, m_dateEdit, atButton, groupCount, m_hours, m_minutes, m_seconds, countButton, groupOptions, m_force, m_fallback, groupStatus, m_status, m_remaining, m_pause, m_checkUpdate, m_progress}) setFont(child, m_font);
+    EnumChildWindows(GetHwnd(), [](HWND hwnd, LPARAM font) { setFont(hwnd, reinterpret_cast<HFONT>(font)); return TRUE; }, reinterpret_cast<LPARAM>(m_font));
+}
+
+void MainWindow::createTray() {
+    m_tray = {sizeof(NOTIFYICONDATAW)}; m_tray.hWnd = GetHwnd(); m_tray.uID = 1; m_tray.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP; m_tray.uCallbackMessage = WM_TRAY; m_tray.hIcon = LoadIconW(nullptr, IDI_APPLICATION); wcscpy_s(m_tray.szTip, L"定时关机");
+    m_trayCreated = Shell_NotifyIconW(NIM_ADD, &m_tray) == TRUE;
+}
+
+void MainWindow::destroyTray() { if (m_trayCreated) Shell_NotifyIconW(NIM_DELETE, &m_tray); m_trayCreated = false; }
 
 void MainWindow::restorePersistedTask() {
     if (!SettingsStore::hasTask()) return;
-    const auto task = SettingsStore::loadTask();
-    if (QMessageBox::question(this, QStringLiteral("恢复任务"), QStringLiteral("检测到上次未完成的关机任务，是否恢复？")) == QMessageBox::Yes) {
-        QString error;
-        if (!m_scheduler.restore(task, &error) && !error.isEmpty()) QMessageBox::warning(this, QStringLiteral("恢复失败"), error);
-    } else {
-        SettingsStore::clearTask();
-    }
+    if (MessageBoxW(GetHwnd(), L"检测到上次未完成的关机任务，是否恢复？", L"恢复任务", MB_YESNO | MB_ICONQUESTION) == IDYES) {
+        std::wstring error; if (!m_scheduler.restore(SettingsStore::loadTask(), &error) && !error.empty()) MessageBoxW(GetHwnd(), error.c_str(), L"恢复失败", MB_OK | MB_ICONWARNING);
+    } else SettingsStore::clearTask();
 }
 
-QString MainWindow::formatDuration(qint64 seconds) const {
-    const qint64 h = seconds / 3600;
-    const qint64 m = (seconds % 3600) / 60;
-    const qint64 s = seconds % 60;
-    return QStringLiteral("%1:%2:%3").arg(h, 2, 10, QLatin1Char('0')).arg(m, 2, 10, QLatin1Char('0')).arg(s, 2, 10, QLatin1Char('0'));
-}
+void MainWindow::setText(HWND controlHandle, const std::wstring &value) { SetWindowTextW(controlHandle, value.c_str()); }
+std::wstring MainWindow::text(HWND controlHandle) const { wchar_t buffer[512]{}; GetWindowTextW(controlHandle, buffer, 512); return buffer; }
 
 void MainWindow::scheduleAt() {
-    QString error;
-    if (!m_scheduler.scheduleAt(m_dateTimeEdit->dateTime(), m_force->isChecked(), m_fallback->isChecked(), &error)) QMessageBox::warning(this, QStringLiteral("设置失败"), error);
+    std::wstring error; if (!m_scheduler.scheduleAt(parseDate(text(m_dateEdit)), Button_GetCheck(m_force) == BST_CHECKED, Button_GetCheck(m_fallback) == BST_CHECKED, &error)) MessageBoxW(GetHwnd(), error.c_str(), L"设置失败", MB_OK | MB_ICONWARNING);
 }
 
 void MainWindow::scheduleCountdown() {
-    const qint64 seconds = m_hours->value() * 3600LL + m_minutes->value() * 60LL + m_seconds->value();
-    QString error;
-    if (!m_scheduler.scheduleCountdown(seconds, m_force->isChecked(), m_fallback->isChecked(), &error)) QMessageBox::warning(this, QStringLiteral("设置失败"), error);
+    const auto h = _wtoi(text(m_hours).c_str()), m = _wtoi(text(m_minutes).c_str()), s = _wtoi(text(m_seconds).c_str());
+    std::wstring error; if (!m_scheduler.scheduleCountdown(static_cast<std::int64_t>(h) * 3600 + m * 60 + s, Button_GetCheck(m_force) == BST_CHECKED, Button_GetCheck(m_fallback) == BST_CHECKED, &error)) MessageBoxW(GetHwnd(), error.c_str(), L"设置失败", MB_OK | MB_ICONWARNING);
 }
 
 void MainWindow::cancelTask() { m_scheduler.cancel(); }
-
-void MainWindow::togglePause() {
-    if (m_scheduler.state() == ShutdownScheduler::State::Paused) m_scheduler.resume(); else m_scheduler.pause();
-}
-
-void MainWindow::showFromTray() { showNormal(); raise(); activateWindow(); }
-
-void MainWindow::trayActivated(QSystemTrayIcon::ActivationReason reason) {
-    if (reason == QSystemTrayIcon::Trigger || reason == QSystemTrayIcon::DoubleClick) showFromTray();
-}
-
-void MainWindow::updateRemaining(qint64 seconds) { m_remaining->setText(seconds > 0 ? formatDuration(seconds) : QStringLiteral("--")); }
-
-void MainWindow::updateState(ShutdownScheduler::State state) {
-    QString text;
-    switch (state) {
-    case ShutdownScheduler::State::Idle: text = QStringLiteral("空闲"); break;
-    case ShutdownScheduler::State::Armed: text = QStringLiteral("已设置"); break;
-    case ShutdownScheduler::State::Paused: text = QStringLiteral("已暂停"); break;
-    case ShutdownScheduler::State::Executing: text = QStringLiteral("正在关机"); break;
-    case ShutdownScheduler::State::Completed: text = QStringLiteral("已完成"); break;
-    case ShutdownScheduler::State::Error: text = QStringLiteral("失败"); break;
-    }
-    m_status->setText(text);
-    m_pauseButton->setEnabled(m_scheduler.isActive());
-    m_pauseButton->setText(state == ShutdownScheduler::State::Paused ? QStringLiteral("继续") : QStringLiteral("暂停"));
-    if (m_cancelAction) m_cancelAction->setEnabled(m_scheduler.isActive());
-}
+void MainWindow::togglePause() { m_scheduler.state() == ShutdownScheduler::State::Paused ? m_scheduler.resume() : m_scheduler.pause(); }
 
 void MainWindow::executeNow() {
-    if (QMessageBox::warning(this, QStringLiteral("确认关机"), QStringLiteral("立即关机？"), QMessageBox::Yes | QMessageBox::No) != QMessageBox::Yes) return;
-    m_scheduler.cancel();
-    QString error;
-    if (!ShutdownExecutor::execute(m_force->isChecked(), &error)) QMessageBox::critical(this, QStringLiteral("关机失败"), error);
+    if (MessageBoxW(GetHwnd(), L"立即关机？", L"确认关机", MB_YESNO | MB_ICONWARNING) != IDYES) return;
+    m_scheduler.cancel(); std::wstring error; if (!ShutdownExecutor::execute(Button_GetCheck(m_force) == BST_CHECKED, &error)) MessageBoxW(GetHwnd(), error.c_str(), L"关机失败", MB_OK | MB_ICONERROR);
 }
 
-void MainWindow::checkForUpdates() {
-    m_silentUpdateCheck = false;
-    if (m_checkUpdateButton) {
-        m_checkUpdateButton->setEnabled(false);
-        m_checkUpdateButton->setText(QStringLiteral("检查中..."));
-    }
-    m_updateManager.checkForUpdates();
+void MainWindow::checkForUpdates(bool silent) {
+    m_silentUpdateCheck = silent; EnableWindow(m_checkUpdate, FALSE); setText(m_checkUpdate, L"检查中..."); m_updateManager.checkForUpdates();
 }
 
-void MainWindow::handleUpdateAvailable(const UpdateInfo &info) {
-    m_availableUpdate = info;
-    if (m_checkUpdateButton) {
-        m_checkUpdateButton->setEnabled(true);
-        m_checkUpdateButton->setText(QStringLiteral("检查更新"));
-    }
-    const QString title = info.title.isEmpty() ? QStringLiteral("发现新版本") : info.title;
-    const QString message = QStringLiteral("发现新版本 %1，当前版本 %2。\n\n是否立即下载？")
-        .arg(info.version, QApplication::applicationVersion());
-    m_silentUpdateCheck = false;
-    if (QMessageBox::question(this, title, message, QMessageBox::Yes | QMessageBox::No) == QMessageBox::Yes) {
-        m_updateProgress->setRange(0, 100);
-        m_updateProgress->setValue(0);
-        m_updateProgress->setFormat(QStringLiteral("准备下载 %1").arg(info.assetName));
-        m_updateManager.downloadUpdate(info);
-    }
+std::wstring MainWindow::formatDuration(std::int64_t seconds) {
+    wchar_t buffer[64]{}; swprintf_s(buffer, 64, L"%02lld:%02lld:%02lld", seconds / 3600, (seconds / 60) % 60, seconds % 60); return buffer;
 }
 
-void MainWindow::handleNoUpdateAvailable() {
-    if (m_checkUpdateButton) {
-        m_checkUpdateButton->setEnabled(true);
-        m_checkUpdateButton->setText(QStringLiteral("检查更新"));
-    }
-    if (!m_silentUpdateCheck) QMessageBox::information(this, QStringLiteral("检查更新"), QStringLiteral("当前已经是最新版本。"));
-    m_silentUpdateCheck = false;
+void MainWindow::updateRemaining(std::int64_t seconds) { setText(m_remaining, seconds > 0 ? formatDuration(seconds) : L"--"); }
+
+void MainWindow::updateState(ShutdownScheduler::State state) {
+    const wchar_t *label = L"空闲"; if (state == ShutdownScheduler::State::Armed) label = L"已设置"; else if (state == ShutdownScheduler::State::Paused) label = L"已暂停"; else if (state == ShutdownScheduler::State::Executing) label = L"正在关机"; else if (state == ShutdownScheduler::State::Completed) label = L"已完成"; else if (state == ShutdownScheduler::State::Error) label = L"失败";
+    setText(m_status, label); EnableWindow(m_pause, m_scheduler.isActive()); setText(m_pause, state == ShutdownScheduler::State::Paused ? L"继续" : L"暂停");
 }
 
-void MainWindow::handleUpdateCheckError(const QString &message) {
-    if (m_checkUpdateButton) {
-        m_checkUpdateButton->setEnabled(true);
-        m_checkUpdateButton->setText(QStringLiteral("检查更新"));
-    }
-    if (!m_silentUpdateCheck) QMessageBox::warning(this, QStringLiteral("检查更新失败"), message);
-    m_silentUpdateCheck = false;
-}
+void MainWindow::showFromTray() { ShowWindow(GetHwnd(), SW_SHOWNORMAL); SetForegroundWindow(GetHwnd()); }
 
-void MainWindow::handleDownloadProgress(qint64 received, qint64 total) {
-    if (!m_updateProgress) return;
-    if (total > 0) {
-        m_updateProgress->setRange(0, 100);
-        m_updateProgress->setValue(static_cast<int>((received * 100) / total));
-        m_updateProgress->setFormat(QStringLiteral("下载中 %1 / %2 MB")
-            .arg(received / 1024.0 / 1024.0, 0, 'f', 1)
-            .arg(total / 1024.0 / 1024.0, 0, 'f', 1));
-    } else {
-        m_updateProgress->setRange(0, 0);
-        m_updateProgress->setFormat(QStringLiteral("下载中..."));
+void MainWindow::post(UiEvent *event) { if (!PostMessageW(GetHwnd(), WM_UI_EVENT, 0, reinterpret_cast<LPARAM>(event))) delete event; }
+
+void MainWindow::handleEvent(std::unique_ptr<UiEvent> event) {
+    switch (event->type) {
+    case UiEvent::Type::UpdateAvailable:
+        m_availableUpdate = event->info; EnableWindow(m_checkUpdate, TRUE); setText(m_checkUpdate, L"检查更新"); m_silentUpdateCheck = false;
+        if (MessageBoxW(GetHwnd(), (L"发现新版本 " + std::wstring(event->info.version.begin(), event->info.version.end()) + L"，是否立即下载？").c_str(), L"发现新版本", MB_YESNO | MB_ICONINFORMATION) == IDYES) { SendMessageW(m_progress, PBM_SETPOS, 0, 0); m_updateManager.downloadUpdate(event->info); }
+        break;
+    case UiEvent::Type::NoUpdate: EnableWindow(m_checkUpdate, TRUE); setText(m_checkUpdate, L"检查更新"); if (!m_silentUpdateCheck) MessageBoxW(GetHwnd(), L"当前已经是最新版本。", L"检查更新", MB_OK | MB_ICONINFORMATION); m_silentUpdateCheck = false; break;
+    case UiEvent::Type::CheckError: EnableWindow(m_checkUpdate, TRUE); setText(m_checkUpdate, L"检查更新"); if (!m_silentUpdateCheck) MessageBoxW(GetHwnd(), event->text.c_str(), L"检查更新失败", MB_OK | MB_ICONWARNING); m_silentUpdateCheck = false; break;
+    case UiEvent::Type::DownloadProgress: if (event->total > 0) SendMessageW(m_progress, PBM_SETPOS, static_cast<WPARAM>(event->received * 100 / event->total), 0); break;
+    case UiEvent::Type::DownloadFinished:
+        SendMessageW(m_progress, PBM_SETPOS, 100, 0);
+        if (MessageBoxW(GetHwnd(), L"更新包已下载，立即重启安装？", L"安装更新", MB_YESNO | MB_ICONQUESTION) == IDYES) { std::wstring error; if (!m_updateManager.installAndRestart(event->text, &error)) MessageBoxW(GetHwnd(), error.c_str(), L"安装更新失败", MB_OK | MB_ICONERROR); else { m_forceQuit = true; DestroyWindow(GetHwnd()); } }
+        break;
+    case UiEvent::Type::DownloadError: SendMessageW(m_progress, PBM_SETPOS, 0, 0); MessageBoxW(GetHwnd(), event->text.c_str(), L"下载更新失败", MB_OK | MB_ICONWARNING); break;
     }
 }
 
-void MainWindow::handleDownloadFinished(const QString &filePath) {
-    m_updateProgress->setRange(0, 100);
-    m_updateProgress->setValue(100);
-    m_updateProgress->setFormat(QStringLiteral("下载完成"));
-    if (QMessageBox::question(this, QStringLiteral("安装更新"), QStringLiteral("更新包已下载，立即重启安装？"), QMessageBox::Yes | QMessageBox::No) != QMessageBox::Yes) return;
-    QString error;
-    if (!m_updateManager.installAndRestart(filePath, &error)) {
-        QMessageBox::critical(this, QStringLiteral("安装更新失败"), error);
-        return;
-    }
-    m_forceQuit = true;
-    qApp->quit();
-}
-
-void MainWindow::handleDownloadError(const QString &message) {
-    m_updateProgress->setRange(0, 100);
-    m_updateProgress->setValue(0);
-    m_updateProgress->setFormat(QStringLiteral("下载失败"));
-    QMessageBox::warning(this, QStringLiteral("下载更新失败"), message);
+BOOL MainWindow::OnCommand(WPARAM wparam, LPARAM) {
+    switch (LOWORD(wparam)) { case IDC_AT: scheduleAt(); return TRUE; case IDC_COUNTDOWN: scheduleCountdown(); return TRUE; case IDC_PAUSE: togglePause(); return TRUE; case IDC_CANCEL: cancelTask(); return TRUE; case IDC_NOW: executeNow(); return TRUE; case IDC_CHECK: checkForUpdates(); return TRUE; }
+    return FALSE;
 }
 
 bool MainWindow::askCloseWithActiveTask() {
-    const auto choice = QMessageBox::question(this, QStringLiteral("退出程序"), QStringLiteral("当前存在活动任务。退出时保留任务吗？"), QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel, QMessageBox::Yes);
-    if (choice == QMessageBox::Cancel) return false;
-    if (choice == QMessageBox::No) m_scheduler.cancel();
-    return true;
+    const int choice = MessageBoxW(GetHwnd(), L"当前存在活动任务。退出时保留任务吗？", L"退出程序", MB_YESNOCANCEL | MB_ICONQUESTION);
+    if (choice == IDCANCEL) return false; if (choice == IDNO) m_scheduler.cancel(); return true;
 }
 
-void MainWindow::closeEvent(QCloseEvent *event) {
-    if (m_scheduler.isActive() && !askCloseWithActiveTask()) { event->ignore(); return; }
-    event->accept();
-}
+void MainWindow::OnClose() { if (!m_forceQuit && m_scheduler.isActive() && !askCloseWithActiveTask()) return; DestroyWindow(GetHwnd()); }
+void MainWindow::OnDestroy() { destroyTray(); PostQuitMessage(0); }
 
-void MainWindow::changeEvent(QEvent *event) {
-    QMainWindow::changeEvent(event);
-    if (event->type() == QEvent::WindowStateChange && isMinimized() && m_tray) hide();
+LRESULT MainWindow::WndProc(UINT msg, WPARAM wparam, LPARAM lparam) {
+    if (msg == WM_TIMER) { if (wparam == TIMER_SCHEDULER) m_scheduler.tick(); else if (wparam == TIMER_AUTO_UPDATE) { KillTimer(GetHwnd(), TIMER_AUTO_UPDATE); checkForUpdates(true); } return 0; }
+    if (msg == WM_SIZE && wparam == SIZE_MINIMIZED) { ShowWindow(GetHwnd(), SW_HIDE); return 0; }
+    if (msg == WM_TRAY && m_trayCreated) { if (lparam == WM_LBUTTONDBLCLK || lparam == WM_LBUTTONUP) showFromTray(); if (lparam == WM_RBUTTONUP) { POINT point{}; GetCursorPos(&point); HMENU menu = CreatePopupMenu(); AppendMenuW(menu, MF_STRING, ID_TRAY_SHOW, L"显示窗口"); AppendMenuW(menu, MF_STRING, ID_TRAY_CANCEL, L"取消任务"); AppendMenuW(menu, MF_STRING, ID_TRAY_CHECK, L"检查更新"); AppendMenuW(menu, MF_STRING, ID_TRAY_NOW, L"立即关机"); AppendMenuW(menu, MF_SEPARATOR, 0, nullptr); AppendMenuW(menu, MF_STRING, ID_TRAY_EXIT, L"退出"); SetForegroundWindow(GetHwnd()); const int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY, point.x, point.y, 0, GetHwnd(), nullptr); DestroyMenu(menu); if (cmd == ID_TRAY_SHOW) showFromTray(); else if (cmd == ID_TRAY_CANCEL) cancelTask(); else if (cmd == ID_TRAY_CHECK) checkForUpdates(); else if (cmd == ID_TRAY_NOW) executeNow(); else if (cmd == ID_TRAY_EXIT) { m_forceQuit = true; DestroyWindow(GetHwnd()); } } return 0; }
+    if (msg == WM_UI_EVENT) { handleEvent(std::unique_ptr<UiEvent>(reinterpret_cast<UiEvent *>(lparam))); return 0; }
+    return CWnd::WndProc(msg, wparam, lparam);
 }

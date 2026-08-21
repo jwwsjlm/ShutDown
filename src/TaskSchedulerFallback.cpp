@@ -1,64 +1,58 @@
 #include "TaskSchedulerFallback.h"
 
-#include <QProcess>
-#include <QDebug>
-#include <QStringList>
+#include <windows.h>
+#include <array>
+#include <cstdio>
+#include <sstream>
 
-QString TaskSchedulerFallback::taskName() {
-    return QStringLiteral("ShutDown_OneShot");
+namespace {
+std::wstring run(const std::wstring &command, DWORD *exitCode = nullptr) {
+    std::array<wchar_t, 4096> buffer{};
+    std::wstring cmd = command;
+    STARTUPINFOW si{sizeof(si)};
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+                        nullptr, nullptr, &si, &pi)) return L"CreateProcess failed";
+    WaitForSingleObject(pi.hProcess, 5000);
+    DWORD code = STILL_ACTIVE;
+    GetExitCodeProcess(pi.hProcess, &code);
+    if (exitCode) *exitCode = code;
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return code == 0 ? L"" : L"系统任务命令执行失败";
+}
 }
 
-bool TaskSchedulerFallback::create(const QDateTime &when, bool force, QString *errorMessage) {
-#ifdef Q_OS_WIN
+std::wstring TaskSchedulerFallback::taskName() { return L"ShutDown_OneShot"; }
+
+bool TaskSchedulerFallback::create(std::time_t when, bool force, std::wstring *errorMessage) {
     remove(nullptr);
-    const QString date = when.date().toString(QStringLiteral("MM/dd/yyyy"));
-    const QString time = when.time().toString(QStringLiteral("HH:mm"));
-    QString command = QStringLiteral("shutdown.exe /s /t 0");
-    if (force) command += QStringLiteral(" /f");
-    const QStringList args{
-        QStringLiteral("/Create"), QStringLiteral("/TN"), taskName(),
-        QStringLiteral("/TR"), command, QStringLiteral("/SC"), QStringLiteral("ONCE"),
-        QStringLiteral("/SD"), date, QStringLiteral("/ST"), time,
-        QStringLiteral("/RL"), QStringLiteral("HIGHEST"), QStringLiteral("/F")};
-    QProcess process;
-    process.start(QStringLiteral("schtasks.exe"), args);
-    if (!process.waitForFinished(5000) || process.exitCode() != 0) {
-        if (errorMessage) *errorMessage = QString::fromLocal8Bit(process.readAllStandardError()).trimmed();
-        if (errorMessage && errorMessage->isEmpty()) *errorMessage = QStringLiteral("创建系统任务失败");
-        qWarning() << "Task Scheduler create failed:" << (errorMessage ? *errorMessage : QString());
+    std::tm local{};
+    localtime_s(&local, &when);
+    wchar_t date[32]{}, time[32]{};
+    std::swprintf(date, 32, L"%02d/%02d/%04d", local.tm_mon + 1, local.tm_mday, local.tm_year + 1900);
+    std::swprintf(time, 32, L"%02d:%02d", local.tm_hour, local.tm_min);
+    std::wstring command = L"schtasks.exe /Create /TN \"" + taskName() + L"\" /TR \"shutdown.exe /s /t 0";
+    if (force) command += L" /f";
+    command += L"\" /SC ONCE /SD " + std::wstring(date) + L" /ST " + std::wstring(time) + L" /RL HIGHEST /F";
+    DWORD code = 1;
+    const auto error = run(command, &code);
+    if (code != 0) {
+        if (errorMessage) *errorMessage = error.empty() ? L"创建系统任务失败" : error;
         return false;
     }
-    qInfo() << "Task Scheduler fallback created for" << when;
     return true;
-#else
-    Q_UNUSED(when); Q_UNUSED(force);
-    if (errorMessage) *errorMessage = QStringLiteral("当前平台不支持 Task Scheduler");
-    return false;
-#endif
 }
 
-bool TaskSchedulerFallback::remove(QString *errorMessage) {
-#ifdef Q_OS_WIN
-    QProcess process;
-    process.start(QStringLiteral("schtasks.exe"), {QStringLiteral("/Delete"), QStringLiteral("/TN"), taskName(), QStringLiteral("/F")});
-    if (!process.waitForFinished(5000)) {
-        if (errorMessage) *errorMessage = QStringLiteral("删除系统任务超时");
-        return false;
-    }
-    qInfo() << "Task Scheduler fallback removed";
-    return process.exitCode() == 0 || process.exitCode() == 1;
-#else
-    Q_UNUSED(errorMessage); return false;
-#endif
+bool TaskSchedulerFallback::remove(std::wstring *errorMessage) {
+    DWORD code = 1;
+    const auto error = run(L"schtasks.exe /Delete /TN \"" + taskName() + L"\" /F", &code);
+    if (code != 0 && code != 1 && errorMessage) *errorMessage = error.empty() ? L"删除系统任务失败" : error;
+    return code == 0 || code == 1;
 }
 
 bool TaskSchedulerFallback::exists() {
-#ifdef Q_OS_WIN
-    QProcess process;
-    process.start(QStringLiteral("schtasks.exe"), {QStringLiteral("/Query"), QStringLiteral("/TN"), taskName()});
-    if (!process.waitForFinished(3000)) return false;
-    return process.exitCode() == 0;
-#else
-    return false;
-#endif
+    DWORD code = 1;
+    run(L"schtasks.exe /Query /TN \"" + taskName() + L"\"", &code);
+    return code == 0;
 }

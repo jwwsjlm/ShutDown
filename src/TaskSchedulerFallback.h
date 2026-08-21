@@ -1,12 +1,12 @@
 #pragma once
 
-#include <QDateTime>
-#include <QString>
+#include <ctime>
+#include <string>
 
 class TaskSchedulerFallback {
 public:
-    static QString taskName();
-    static bool create(const QDateTime &when, bool force, QString *errorMessage = nullptr);
-    static bool remove(QString *errorMessage = nullptr);
+    static std::wstring taskName();
+    static bool create(std::time_t when, bool force, std::wstring *errorMessage = nullptr);
+    static bool remove(std::wstring *errorMessage = nullptr);
     static bool exists();
 };

@@ -7,6 +7,8 @@
 int main(int argc, char **argv) {
     QCoreApplication app(argc, argv);
     Q_UNUSED(app);
+    QCoreApplication::setOrganizationName(QStringLiteral("ShutDown"));
+    QCoreApplication::setApplicationName(QStringLiteral("ShutDownTests"));
 
     int failures = 0;
     const auto fail = [&failures](const char *message) {

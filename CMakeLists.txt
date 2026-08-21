@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(ShutDown VERSION 2.0.5 LANGUAGES CXX)
+project(ShutDown VERSION 2.0.6 LANGUAGES CXX)
 
 if (NOT WIN32)
     message(FATAL_ERROR "ShutDown now targets Windows and Win32++ only")

@@ -14,6 +14,7 @@
 #include <QRegularExpression>
 #include <QStandardPaths>
 #include <QStringList>
+#include <QSslSocket>
 #include <QSysInfo>
 #include <QTextStream>
 #include <QTimer>
@@ -88,6 +89,19 @@ void UpdateManager::checkForUpdates() {
     m_checkErrors.clear();
     m_completedChecks = 0;
     m_successfulChecks = 0;
+    // Qt 5 on Windows loads its OpenSSL 1.1 backend at runtime.  If the
+    // runtime DLLs are missing, every HTTPS source fails with the misleading
+    // generic error "TLS initialization failed".  Report the real cause once
+    // instead of issuing a dozen doomed mirror requests.
+    if (!QSslSocket::supportsSsl()) {
+        emit checkingStarted(0);
+        emit checkingFinished();
+        emit checkError(QStringLiteral(
+            "当前程序未加载 HTTPS/TLS 支持，无法检查更新。\n\n"
+            "请重新下载包含 OpenSSL 运行库的完整 ZIP 包，或将 libcrypto-1_1*.dll "
+            "和 libssl-1_1*.dll 放在 ShutDown.exe 同目录。"));
+        return;
+    }
     const auto urls = checkUrls();
     m_totalChecks = urls.size();
     emit checkingStarted(m_totalChecks);

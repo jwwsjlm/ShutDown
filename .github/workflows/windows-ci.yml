@@ -21,9 +21,11 @@ jobs:
           - arch: x64
             qt_arch: win64_msvc2019_64
             cmake_arch: x64
+            openssl_tool: tools_openssl_x64
           - arch: x86
             qt_arch: win32_msvc2019
             cmake_arch: Win32
+            openssl_tool: tools_openssl_x86
 
     steps:
       - name: Checkout
@@ -36,6 +38,7 @@ jobs:
           host: windows
           target: desktop
           arch: ${{ matrix.qt_arch }}
+          tools: ${{ matrix.openssl_tool }}
           dir: "${{ github.workspace }}/Qt"
           cache: true
           set-env: true
@@ -86,6 +89,17 @@ jobs:
             --dir $package `
             $exe
           if ($LASTEXITCODE -ne 0) { throw "windeployqt failed" }
+          # Qt 5.15 uses the OpenSSL 1.1 backend on Windows.  windeployqt
+          # cannot discover the separately installed OpenSSL toolkit, so copy
+          # the matching architecture DLLs explicitly into the ZIP.
+          $opensslDlls = Get-ChildItem -Path $env:IQTA_TOOLS -Recurse -File `
+            -Include 'libcrypto*.dll','libssl*.dll' -ErrorAction SilentlyContinue
+          if (-not $opensslDlls -or $opensslDlls.Count -lt 2) {
+            throw "OpenSSL runtime DLLs were not found under IQTA_TOOLS=$env:IQTA_TOOLS"
+          }
+          foreach ($dll in $opensslDlls) {
+            Copy-Item -LiteralPath $dll.FullName -Destination (Join-Path $package $dll.Name) -Force
+          }
           Copy-Item (Join-Path $pwd "licenses/Qt-LGPL.md") (Join-Path $package "Qt-LGPL.md") -Force
           $archive = Join-Path $pwd "ShutDown-windows-${{ matrix.arch }}.zip"
           Compress-Archive -Path (Join-Path $package '*') -DestinationPath $archive -Force

@@ -1,6 +1,16 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(ShutDown VERSION 2.0.6 LANGUAGES CXX)
+set(SHUTDOWN_BASE_VERSION 2.0.6)
+set(SHUTDOWN_EFFECTIVE_VERSION "${SHUTDOWN_BASE_VERSION}")
+if (DEFINED SHUTDOWN_VERSION_OVERRIDE AND NOT "${SHUTDOWN_VERSION_OVERRIDE}" STREQUAL "")
+    set(SHUTDOWN_EFFECTIVE_VERSION "${SHUTDOWN_VERSION_OVERRIDE}")
+elseif (DEFINED ENV{SHUTDOWN_VERSION_OVERRIDE} AND NOT "$ENV{SHUTDOWN_VERSION_OVERRIDE}" STREQUAL "")
+    set(SHUTDOWN_EFFECTIVE_VERSION "$ENV{SHUTDOWN_VERSION_OVERRIDE}")
+elseif (DEFINED ENV{GITHUB_REF_NAME} AND "$ENV{GITHUB_REF_NAME}" MATCHES "^v?([0-9]+\\.[0-9]+\\.[0-9]+)$")
+    set(SHUTDOWN_EFFECTIVE_VERSION "${CMAKE_MATCH_1}")
+endif()
+
+project(ShutDown VERSION ${SHUTDOWN_EFFECTIVE_VERSION} LANGUAGES CXX)
 
 if (NOT WIN32)
     message(FATAL_ERROR "ShutDown now targets Windows and Win32++ only")
@@ -12,6 +22,13 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_subdirectory(third_party/win32xx)
 
+set(SHUTDOWN_RC_FILE "${CMAKE_CURRENT_BINARY_DIR}/generated/app.rc")
+set(SHUTDOWN_RC_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/resources/resource.h")
+set(SHUTDOWN_ICON_FILE "${CMAKE_CURRENT_SOURCE_DIR}/resources/app.ico")
+set(SHUTDOWN_MANIFEST_FILE "${CMAKE_CURRENT_SOURCE_DIR}/resources/app.manifest")
+set(SHUTDOWN_FILE_VERSION "${PROJECT_VERSION}.0")
+configure_file(resources/app.rc.in "${SHUTDOWN_RC_FILE}" @ONLY)
+
 set(SHUTDOWN_SOURCES
     src/main.cpp
     src/AppLogger.cpp
@@ -21,12 +38,12 @@ set(SHUTDOWN_SOURCES
     src/TaskSchedulerFallback.cpp
     src/UpdateManager.cpp
     src/MainWindow.cpp
-    resources/app.rc
+    "${SHUTDOWN_RC_FILE}"
 )
 
 add_executable(ShutDown WIN32 ${SHUTDOWN_SOURCES})
-set_source_files_properties(resources/app.rc PROPERTIES
-    OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/resources/app.manifest;${CMAKE_CURRENT_SOURCE_DIR}/resources/app.ico;${CMAKE_CURRENT_SOURCE_DIR}/resources/resource.h"
+set_source_files_properties("${SHUTDOWN_RC_FILE}" PROPERTIES
+    OBJECT_DEPENDS "${SHUTDOWN_MANIFEST_FILE};${SHUTDOWN_ICON_FILE};${SHUTDOWN_RC_INCLUDE};${CMAKE_CURRENT_SOURCE_DIR}/resources/app.rc.in"
 )
 target_include_directories(ShutDown PRIVATE src third_party/win32xx/include)
 target_link_libraries(ShutDown PRIVATE win32xx::win32xx winhttp bcrypt comctl32 shell32 advapi32 user32 gdi32 ole32 uxtheme)

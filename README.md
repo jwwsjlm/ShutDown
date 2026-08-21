@@ -65,17 +65,19 @@ GitHub Release 提供：
 ## GitHub Actions
 
 `.github/workflows/windows-ci.yml` 会分别构建 x64 和 x86，执行 CTest，并在推送 `v*` 标签时上传两个 ZIP 到 Release。
+workflow 只负责编译、测试、打包和发布当前 tag，不会自动删除旧 Release、旧 tag 或历史版本。
 
 每个版本的 Release 必须同时提供更新说明，文件放在 `release-notes/vX.Y.Z.md`；可复制
 `release-notes/TEMPLATE.md` 创建新版本说明。工作流会把该文件直接作为 GitHub Release 正文；
 如果缺少该文件，发布流程会失败，避免发布空泛说明。
 
-发布新版本时创建标签即可。GitHub Actions 的 tag 构建会自动把程序版本、`FILEVERSION`
-和 `PRODUCTVERSION` 设置为当前标签版本，例如 `v2.0.7` 会生成 `2.0.7.0`：
+发布新版本时先创建对应的 `release-notes/vX.Y.Z.md`，再创建标签。GitHub Actions 的 tag
+构建会显式传入 `SHUTDOWN_VERSION_OVERRIDE`，并自动把程序版本、`FILEVERSION` 和
+`PRODUCTVERSION` 设置为当前标签版本，例如 `v2.0.8` 会生成 `2.0.8.0`：
 
 ```powershell
-git tag v2.0.0
-git push origin v2.0.0
+git tag v2.0.8
+git push origin v2.0.8
 ```
 
 ## 许可

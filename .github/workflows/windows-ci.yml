@@ -104,19 +104,28 @@ jobs:
           name: ShutDown-app-x86
           path: release/app-x86
 
-      - name: Verify release notes
+      - name: Render release notes
         shell: pwsh
         run: |
-          $notes = Join-Path $pwd "release-notes/${{ github.ref_name }}.md"
+          $tag = "${{ github.ref_name }}"
+          if ($tag -notmatch '^v?(\d+\.\d+\.\d+)$') {
+            throw "Tag '$tag' is not a semantic version tag like v2.1.4."
+          }
+          $version = $Matches[1]
+          $notes = Join-Path $pwd "release-notes/$tag.md"
           if (-not (Test-Path $notes)) {
             throw "缺少 $notes。请先写好本版本的具体更新说明，避免 Release 显示空泛描述。"
           }
+          New-Item -ItemType Directory -Path (Join-Path $pwd "release") -Force | Out-Null
+          $body = Get-Content -LiteralPath $notes -Raw
+          $body = $body.Replace('vX.Y.Z', $tag).Replace('<version>', $version)
+          Set-Content -LiteralPath (Join-Path $pwd "release/generated-notes.md") -Value $body -NoNewline -Encoding UTF8
 
       - name: Build Velopack packages
         shell: pwsh
         run: |
           $version = "${{ github.ref_name }}" -replace '^v', ''
-          $notes = Join-Path $pwd "release-notes/${{ github.ref_name }}.md"
+          $notes = Join-Path $pwd "release/generated-notes.md"
           $out = Join-Path $pwd "release/velopack"
           dotnet tool install --tool-path .vpk vpk --version 1.2.0
           .\.vpk\vpk pack --packId ShutDown --packVersion $version --packDir release/app-x64 --mainExe ShutDown.exe --runtime win-x64 --channel win-x64 --outputDir $out --releaseNotes $notes --icon resources/app.ico --packTitle ShutDown --packAuthors ShutDown --yes --skip-updates
@@ -126,6 +135,6 @@ jobs:
         uses: softprops/action-gh-release@v3.0.2
         with:
           generate_release_notes: false
-          body_path: release-notes/${{ github.ref_name }}.md
+          body_path: release/generated-notes.md
           files: |
             release/velopack/*

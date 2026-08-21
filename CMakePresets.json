@@ -1,0 +1,103 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "windows-x64",
+      "displayName": "Windows x64 (Visual Studio 2022)",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/windows-x64",
+      "cacheVariables": {
+        "BUILD_TESTING": "ON"
+      }
+    },
+    {
+      "name": "windows-x86",
+      "displayName": "Windows x86 (Visual Studio 2022)",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "Win32",
+      "binaryDir": "${sourceDir}/build/windows-x86",
+      "cacheVariables": {
+        "BUILD_TESTING": "ON"
+      }
+    },
+    {
+      "name": "windows-x64-velopack",
+      "displayName": "Windows x64 + local Velopack SDK",
+      "inherits": "windows-x64",
+      "binaryDir": "${sourceDir}/build/windows-x64-velopack",
+      "cacheVariables": {
+        "VELOPACK_ROOT": "${sourceDir}/tools/velopack"
+      }
+    },
+    {
+      "name": "mingw-local",
+      "displayName": "MinGW local build",
+      "generator": "MinGW Makefiles",
+      "binaryDir": "${sourceDir}/build-local",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "BUILD_TESTING": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-x64-release",
+      "configurePreset": "windows-x64",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-x86-release",
+      "configurePreset": "windows-x86",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-x64-velopack-release",
+      "configurePreset": "windows-x64-velopack",
+      "configuration": "Release"
+    },
+    {
+      "name": "mingw-local-release",
+      "configurePreset": "mingw-local"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-x64-release",
+      "configurePreset": "windows-x64",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-x86-release",
+      "configurePreset": "windows-x86",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-x64-velopack-release",
+      "configurePreset": "windows-x64-velopack",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "mingw-local-release",
+      "configurePreset": "mingw-local",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

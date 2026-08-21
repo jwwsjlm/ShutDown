@@ -51,6 +51,31 @@ void repaintWindow(HWND hwnd) {
     ::RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ERASENOW | RDW_ALLCHILDREN | RDW_UPDATENOW);
 }
 
+std::wstring utf8ToWide(const std::string &value) {
+    if (value.empty()) return {};
+    const int size = MultiByteToWideChar(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0);
+    if (size <= 0) return std::wstring(value.begin(), value.end());
+    std::wstring result(size, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), result.data(), size);
+    return result;
+}
+
+std::wstring updatePromptText(const UpdateInfo &info) {
+    std::wstring message = L"发现新版本 " + utf8ToWide(info.version) + L"。";
+    if (!info.notes.empty()) {
+        std::wstring notes = utf8ToWide(info.notes);
+        notes.erase(std::remove(notes.begin(), notes.end(), L'\r'), notes.end());
+        constexpr size_t kMaxNotesChars = 1800;
+        if (notes.size() > kMaxNotesChars) {
+            notes.resize(kMaxNotesChars);
+            notes += L"\n...";
+        }
+        message += L"\n\n更新内容：\n" + notes;
+    }
+    message += L"\n\n是否立即下载？";
+    return message;
+}
+
 std::time_t pickerDateTime(HWND datePicker, HWND timePicker) {
     SYSTEMTIME st{};
     SYSTEMTIME time{};
@@ -294,7 +319,7 @@ void MainWindow::handleEvent(std::unique_ptr<UiEvent> event) {
     switch (event->type) {
     case UiEvent::Type::UpdateAvailable:
         m_availableUpdate = event->info; ::EnableWindow(m_checkUpdate, TRUE); setText(m_checkUpdate, L"检查更新"); m_silentUpdateCheck = false;
-        if (::MessageBoxW(GetHwnd(), (L"发现新版本 " + std::wstring(event->info.version.begin(), event->info.version.end()) + L"，是否立即下载？").c_str(), L"发现新版本", MB_YESNO | MB_ICONINFORMATION) == IDYES) { SendMessageW(m_progress, PBM_SETPOS, 0, 0); m_updateManager.downloadUpdate(event->info); }
+        if (::MessageBoxW(GetHwnd(), updatePromptText(event->info).c_str(), L"发现新版本", MB_YESNO | MB_ICONINFORMATION) == IDYES) { SendMessageW(m_progress, PBM_SETPOS, 0, 0); m_updateManager.downloadUpdate(event->info); }
         break;
     case UiEvent::Type::NoUpdate: ::EnableWindow(m_checkUpdate, TRUE); setText(m_checkUpdate, L"检查更新"); if (!m_silentUpdateCheck) ::MessageBoxW(GetHwnd(), L"当前已经是最新版本。", L"检查更新", MB_OK | MB_ICONINFORMATION); m_silentUpdateCheck = false; break;
     case UiEvent::Type::CheckError: ::EnableWindow(m_checkUpdate, TRUE); setText(m_checkUpdate, L"检查更新"); if (!m_silentUpdateCheck) ::MessageBoxW(GetHwnd(), event->text.c_str(), L"检查更新失败", MB_OK | MB_ICONWARNING); m_silentUpdateCheck = false; break;

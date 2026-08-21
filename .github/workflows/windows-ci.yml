@@ -38,7 +38,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/.qt-static/${{ matrix.arch }}
-          key: qt-5.15.2-static-${{ matrix.arch }}-msvc2019-v1
+          key: qt-5.15.2-static-${{ matrix.arch }}-msvc2019-v2
 
       - name: Build or restore static Qt 5.15.2
         shell: pwsh

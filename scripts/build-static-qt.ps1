@@ -9,8 +9,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $qtVersion = '5.15.2'
 $sourceRoot = Join-Path $env:RUNNER_TEMP "qt-$qtVersion-src-$Architecture"
-$archive = Join-Path $env:RUNNER_TEMP "qt-everywhere-opensource-src-$qtVersion.zip"
-$sourceUrl = "https://download.qt.io/archive/qt/5.15/$qtVersion/single/qt-everywhere-opensource-src-$qtVersion.zip"
+$archive = Join-Path $env:RUNNER_TEMP "qt-everywhere-src-$qtVersion.zip"
+$sourceUrl = "https://download.qt.io/archive/qt/5.15/$qtVersion/single/qt-everywhere-src-$qtVersion.zip"
 
 if (Test-Path (Join-Path $InstallRoot 'lib/cmake/Qt5/Qt5Config.cmake')) {
     Write-Host "Static Qt cache hit: $InstallRoot"

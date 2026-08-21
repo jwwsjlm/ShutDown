@@ -31,6 +31,10 @@ target_compile_definitions(ShutDown PRIVATE UNICODE _UNICODE NOMINMAX SHUTDOWN_V
 if (MSVC)
     target_compile_options(ShutDown PRIVATE /utf-8)
 endif()
+if (MINGW)
+    # MinGW uses a Unicode CRT entry point for wWinMain.
+    target_link_options(ShutDown PRIVATE -municode)
+endif()
 include(CTest)
 if (BUILD_TESTING)
     add_subdirectory(tests)

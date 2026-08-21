@@ -62,7 +62,7 @@ std::string jsonString(const std::string &json, const std::string &key) {
     for (; position < json.size(); ++position) {
         const char c = json[position];
         if (!escaped && c == '\"') break;
-        if (!escaped && c == '\\\\') escaped = true;
+        if (!escaped && c == '\\') escaped = true;
         else escaped = false;
         raw += c;
     }

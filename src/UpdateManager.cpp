@@ -85,7 +85,7 @@ bool httpGet(const std::string &url, std::vector<unsigned char> *data, std::func
     components.dwUrlPathLength = _countof(path);
     components.lpszExtraInfo = extra;
     components.dwExtraInfoLength = _countof(extra);
-    if (!WinHttpCrackUrlW(wideUrl.c_str(), 0, 0, &components)) return false;
+    if (!WinHttpCrackUrl(wideUrl.c_str(), 0, 0, &components)) return false;
 
     HINTERNET session = WinHttpOpen(L"ShutDown-Updater/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                                     WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
@@ -99,7 +99,7 @@ bool httpGet(const std::string &url, std::vector<unsigned char> *data, std::func
                                            WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
                                            components.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0);
     if (!request) { WinHttpCloseHandle(connection); WinHttpCloseHandle(session); return false; }
-    WinHttpAddRequestHeadersW(request, L"Accept: application/vnd.github+json\r\n", -1, WINHTTP_ADDREQ_FLAG_ADD);
+    WinHttpAddRequestHeaders(request, L"Accept: application/vnd.github+json\r\n", -1, WINHTTP_ADDREQ_FLAG_ADD);
     const BOOL sent = WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, nullptr, 0, 0, 0) &&
                       WinHttpReceiveResponse(request, nullptr);
     if (!sent) { WinHttpCloseHandle(request); WinHttpCloseHandle(connection); WinHttpCloseHandle(session); return false; }

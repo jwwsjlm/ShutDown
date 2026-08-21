@@ -143,8 +143,8 @@ void MainWindow::restorePersistedTask() {
     } else SettingsStore::clearTask();
 }
 
-void MainWindow::setText(HWND controlHandle, const std::wstring &value) { SetWindowTextW(controlHandle, value.c_str()); }
-std::wstring MainWindow::text(HWND controlHandle) const { wchar_t buffer[512]{}; GetWindowTextW(controlHandle, buffer, 512); return buffer; }
+void MainWindow::setText(HWND controlHandle, const std::wstring &value) { ::SetWindowTextW(controlHandle, value.c_str()); }
+std::wstring MainWindow::text(HWND controlHandle) const { wchar_t buffer[512]{}; ::GetWindowTextW(controlHandle, buffer, 512); return buffer; }
 
 void MainWindow::scheduleAt() {
     std::wstring error; if (!m_scheduler.scheduleAt(parseDate(text(m_dateEdit)), isChecked(m_force), isChecked(m_fallback), &error)) ::MessageBoxW(GetHwnd(), error.c_str(), L"设置失败", MB_OK | MB_ICONWARNING);

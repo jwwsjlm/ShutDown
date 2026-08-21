@@ -12,7 +12,7 @@
 - `ExitWindowsEx` → `InitiateSystemShutdownEx` → `shutdown.exe` 三级执行
 - 可选 `schtasks.exe` 一次性系统任务兜底
 - 使用 `%APPDATA%\ShutDown\settings.ini` 保存任务状态
-- GitHub Release 多源更新检查、架构匹配、下载进度、SHA-256 校验和自动重启安装
+- GitHub Release 更新检查、架构匹配、下载进度、SHA-256 校验和自动重启安装
 
 ## 构建
 
@@ -58,7 +58,8 @@ GitHub Release 提供：
 - `ShutDown-windows-x64.zip`
 - `ShutDown-windows-x86.zip`
 
-更新器依据当前进程位数选择对应 ZIP，不会让 32 位程序下载 x64 包。程序运行时不需要 Qt DLL、平台插件或 OpenSSL DLL。
+更新器直接读取 GitHub Release API；API 受限时回退到 GitHub Release 页面，并依据当前进程位数选择对应 ZIP，
+不会让 32 位程序下载 x64 包。程序运行时不需要 Qt DLL、平台插件或 OpenSSL DLL。
 
 ## GitHub Actions
 

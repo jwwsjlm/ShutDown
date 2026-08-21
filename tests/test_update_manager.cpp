@@ -10,6 +10,9 @@ int main() {
     if (!UpdateManager::parseRelease(release, &info)) fail("release parse");
     const std::string expected = UpdateManager::currentArchitectureToken() == "x64" ? "ShutDown-windows-x64.zip" : "ShutDown-windows-x86.zip";
     if (info.assetName != expected) fail("architecture asset selection");
+    const std::string page = "<a href=\"/jwwsjlm/ShutDown/releases/tag/v2.0.2\">v2.0.2</a> ShutDown-windows-" + UpdateManager::currentArchitectureToken() + ".zip";
+    UpdateInfo pageInfo;
+    if (!UpdateManager::parseReleasePage(page, &pageInfo) || pageInfo.version != "2.0.2") fail("release page parse");
     if (UpdateManager::normalizeVersion("v2.1.0-beta") != "2.1.0") fail("version normalize");
     if (failures == 0) { std::puts("Win32 update tests: PASS"); return 0; }
     return 1;

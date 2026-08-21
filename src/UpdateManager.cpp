@@ -20,9 +20,6 @@ constexpr char kApiPath[] = "/repos/jwwsjlm/ShutDown/releases/latest";
 const std::vector<std::string> kMirrors{
     "https://gh.jasonzeng.dev/", "https://ghproxy.monkeyray.net/", "https://gh-proxy.com/",
     "https://cdn.akaere.online/", "https://git.yylx.win/"};
-const std::vector<std::string> kJsDelivr{
-    "https://fastly.jsdelivr.net/", "https://testingcf.jsdelivr.net/", "https://cdn.jsdelivr.net/"};
-
 std::wstring utf8ToWide(const std::string &value) {
     if (value.empty()) return {};
     const int size = MultiByteToWideChar(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0);
@@ -238,6 +235,26 @@ bool UpdateManager::parseRelease(const std::string &object, UpdateInfo *info) {
     return false;
 }
 
+bool UpdateManager::parseReleasePage(const std::string &html, UpdateInfo *info) {
+    if (!info) return false;
+    *info = UpdateInfo{};
+    const std::string tagMarker = "/releases/tag/";
+    const size_t tagPos = html.find(tagMarker);
+    if (tagPos == std::string::npos) return false;
+    const size_t tagStart = tagPos + tagMarker.size();
+    size_t tagEnd = tagStart;
+    while (tagEnd < html.size() && html[tagEnd] != '"' && html[tagEnd] != '\'' && html[tagEnd] != '<' && html[tagEnd] != '/') ++tagEnd;
+    if (tagEnd == tagStart) return false;
+    info->tagName = html.substr(tagStart, tagEnd - tagStart);
+    info->version = normalizeVersion(info->tagName);
+    info->title = "GitHub Release";
+    const std::string asset = "ShutDown-windows-" + currentArchitectureToken() + ".zip";
+    if (html.find(asset) == std::string::npos) return false;
+    info->assetName = asset;
+    info->downloadUrl = "https://github.com/jwwsjlm/ShutDown/releases/download/" + info->tagName + "/" + asset;
+    return info->isValid();
+}
+
 bool UpdateManager::parseDescriptor(const std::string &object, UpdateInfo *info) {
     if (!info) return false;
     info->version = normalizeVersion(jsonString(object, "version"));
@@ -262,10 +279,10 @@ void UpdateManager::checkForUpdates() {
     joinWorker(); m_cancel = false;
     if (m_callbacks.checkingStarted) m_callbacks.checkingStarted();
     m_worker = std::thread([this] {
-        std::vector<std::string> urls{"https://raw.githubusercontent.com/jwwsjlm/ShutDown/main/update.json"};
-        for (const auto &mirror : kJsDelivr) urls.push_back(mirror + "gh/jwwsjlm/ShutDown@main/update.json");
-        urls.push_back("https://api.github.com" + std::string(kApiPath));
+        std::vector<std::string> urls{"https://api.github.com" + std::string(kApiPath),
+                                      "https://github.com/jwwsjlm/ShutDown/releases/latest"};
         for (const auto &mirror : kMirrors) urls.push_back(mirror + "https://api.github.com" + kApiPath);
+        for (const auto &mirror : kMirrors) urls.push_back(mirror + "https://github.com/jwwsjlm/ShutDown/releases/latest");
         std::vector<UpdateInfo> candidates; std::wstring errors;
         bool validSource = false;
         for (const auto &url : urls) {
@@ -274,7 +291,7 @@ void UpdateManager::checkForUpdates() {
             if (!httpGet(url, &body)) { errors += utf8ToWide(url) + L": HTTP/TLS 请求失败\n"; continue; }
             const std::string text(body.begin(), body.end()); UpdateInfo info;
             if ((text.find("\"tag_name\"") != std::string::npos && parseRelease(text, &info)) ||
-                (text.find("\"version\"") != std::string::npos && parseDescriptor(text, &info))) {
+                (text.find("/releases/tag/") != std::string::npos && parseReleasePage(text, &info))) {
                 validSource = true;
                 if (isNewerThanCurrent(info.version)) candidates.push_back(info);
                 if (candidates.empty() && m_callbacks.noUpdateAvailable) { /* continue checking mirrors */ }

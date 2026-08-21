@@ -1,66 +1,76 @@
 # ShutDown
 
-一个面向 Windows 的 Qt 5/6 + C++17 定时关机工具。
-
-当前 CMake 会优先使用 Qt 6，找不到 Qt 6 时自动回退到 Qt 5.15。Qt 5.15.2
-在新 Qt Online Installer 中可能不再显示；如果安装器只有 Qt 6.x，可以直接安装
-当前可用的 Qt 6.x，项目无需修改源码即可构建。Qt 6 不再支持 Windows 7，Windows 7 需要单独
-准备 Qt 5.15 工具链。
+轻量级 Windows 定时关机工具，使用 **C++17 + Win32++** 构建，不依赖 Qt、Qt DLL 或 OpenSSL DLL。
 
 ## 功能
 
 - 指定日期/时间关机
 - 小时、分钟、秒倒计时
 - 暂停、继续、取消、立即关机
-- 系统托盘与最小化到托盘
-- QSettings 持久化，重启时确认恢复
+- 最小化隐藏到系统托盘，双击托盘图标恢复
+- 关闭按钮直接退出；存在活动任务时可选择保留或取消
 - `ExitWindowsEx` → `InitiateSystemShutdownEx` → `shutdown.exe` 三级执行
 - 可选 `schtasks.exe` 一次性系统任务兜底
-- `QLockFile` 单实例保护
-- GitHub Release 多源并行更新检查、代理回退、下载进度、SHA-256 校验和自动重启安装
+- 使用 `%APPDATA%\ShutDown\settings.ini` 保存任务状态
+- GitHub Release 多源更新检查、架构匹配、下载进度、SHA-256 校验和自动重启安装
 
 ## 构建
 
-需要 Qt 5.15.x、CMake 3.16+ 和支持 C++17 的 MSVC/MinGW：
+依赖：
+
+- Windows 10/11 或 Windows Server
+- Visual Studio 2022（含 Desktop C++）
+- CMake 3.16+
+
+Win32++ 已 vendor 到 `third_party/win32xx`，CMake 会直接使用，无需额外安装 GUI 框架。
 
 ```powershell
-cmake -S D:\code\ShutDown -B D:\code\ShutDown\build -G "MinGW Makefiles" -DCMAKE_PREFIX_PATH=H:\Dev\Qt\6.5.3\mingw_64
+cmake -S D:\code\ShutDown -B D:\code\ShutDown\build -G "Visual Studio 17 2022" -A x64
 cmake --build D:\code\ShutDown\build --config Release
 ctest --test-dir D:\code\ShutDown\build -C Release --output-on-failure
 ```
 
-也可以在 Qt 安装到 `H:\Dev\Qt` 或 `C:\Qt` 后直接运行自动探测脚本：
+构建 32 位版本时，将架构改为 `Win32`：
 
 ```powershell
-PowerShell -ExecutionPolicy Bypass -File D:\code\ShutDown\scripts\build.ps1 -Test
+cmake -S D:\code\ShutDown -B D:\code\ShutDown\build-x86 -G "Visual Studio 17 2022" -A Win32
+cmake --build D:\code\ShutDown\build-x86 --config Release
 ```
 
-脚本使用 UTF-8 编码，并会优先使用 Qt 安装目录中的 `Tools\CMake_64`，因此可直接
-在 Windows PowerShell 5.1 中运行，不会因为中文提示或 CMake 未加入 `PATH` 而失败。
+也可以使用脚本：
+
+```powershell
+PowerShell -ExecutionPolicy Bypass -File D:\code\ShutDown\scripts\build.ps1 -Architecture x64 -Test
+PowerShell -ExecutionPolicy Bypass -File D:\code\ShutDown\scripts\build.ps1 -Architecture x86 -Test
+```
+
+## 发布包
+
+发布采用 ZIP，而不是强行追求单文件。每个 ZIP 只包含：
+
+```text
+ShutDown.exe
+Win32xx-MIT.txt
+```
+
+GitHub Release 提供：
+
+- `ShutDown-windows-x64.zip`
+- `ShutDown-windows-x86.zip`
+
+更新器依据当前进程位数选择对应 ZIP，不会让 32 位程序下载 x64 包。程序运行时不需要 Qt DLL、平台插件或 OpenSSL DLL。
 
 ## GitHub Actions
 
-`.github/workflows/windows-ci.yml` 会在 Push、Pull Request 和 `v*` 标签时自动执行：
+`.github/workflows/windows-ci.yml` 会分别构建 x64 和 x86，执行 CTest，并在推送 `v*` 标签时上传两个 ZIP 到 Release。
 
-- 安装 Qt 5.15.2 MSVC 2019 x86 / x64
-- 使用 Visual Studio 2022 编译
-- 运行 CTest
-- 使用 `windeployqt` 打包 Qt 运行库
-- 对 `v*` 标签自动创建 GitHub Release 并上传两个架构的 ZIP
+发布新版本时同步修改 `CMakeLists.txt` 中的项目版本并创建标签，例如：
 
-发布新版本时，请同步修改 `D:\code\ShutDown\CMakeLists.txt` 中的 `project(... VERSION ...)`，
-然后创建同名标签，例如版本 `1.0.11` 使用标签 `v1.0.11`。Release 需要同时提供
-`ShutDown-windows-x64.zip` 和 `ShutDown-windows-x86.zip`，程序会根据自身架构选择资产，
-并在确认 SHA-256（如果 GitHub 提供 digest）后下载和安装。
+```powershell
+git tag v2.0.0
+git push origin v2.0.0
+```
 
-更新检查会并行尝试 GitHub API、jsDelivr 静态源和若干 GitHub 代理；代理仅作为网络回退，
-最终版本号以可验证的 GitHub Release 响应为准。下载失败会自动切换下一个地址。
+## 许可
 
-工作流当前固定使用的 action 版本：
-
-- `actions/checkout@v7.0.1`
-- `actions/cache@v4`
-- `ilammy/msvc-dev-cmd@v1`
-- `actions/upload-artifact@v7.0.1`
-
-ZIP 包内已包含 Qt 运行库和平台插件，无需用户单独安装 Qt。系统任务和关机 API 可能受本机组策略、UAC、域策略或未保存应用阻止；“强制关闭”应谨慎启用。
+主程序代码按仓库现有许可发布；`third_party/win32xx/license.txt` 随发布包提供 Win32++ MIT 许可文本。

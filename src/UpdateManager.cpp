@@ -99,6 +99,12 @@ bool httpGet(const std::string &url, std::vector<unsigned char> *data, std::func
                                            WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
                                            components.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0);
     if (!request) { WinHttpCloseHandle(connection); WinHttpCloseHandle(session); return false; }
+    if (components.nScheme == INTERNET_SCHEME_HTTPS) {
+        DWORD protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2 |
+                          WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_1 |
+                          WINHTTP_FLAG_SECURE_PROTOCOL_TLS1;
+        WinHttpSetOption(request, WINHTTP_OPTION_SECURE_PROTOCOLS, &protocols, sizeof(protocols));
+    }
     WinHttpAddRequestHeaders(request, L"Accept: application/vnd.github+json\r\n", -1, WINHTTP_ADDREQ_FLAG_ADD);
     const BOOL sent = WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, nullptr, 0, 0, 0) &&
                       WinHttpReceiveResponse(request, nullptr);

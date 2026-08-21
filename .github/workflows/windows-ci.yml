@@ -30,6 +30,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7.0.1
 
+      - name: Download Velopack C SDK
+        shell: pwsh
+        run: |
+          $root = Join-Path $pwd "build/velopack"
+          New-Item -ItemType Directory -Path $root -Force | Out-Null
+          gh release download 1.2.0 --repo velopack/velopack --pattern velopack_libc_1.2.0.zip --dir $root --clobber
+          Expand-Archive -LiteralPath (Join-Path $root "velopack_libc_1.2.0.zip") -DestinationPath $root -Force
+          "VELOPACK_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Configure
         shell: pwsh
         run: |
@@ -41,7 +50,7 @@ jobs:
             }
             $versionArgs += "-DSHUTDOWN_VERSION_OVERRIDE=$($Matches[1])"
           }
-          cmake -S . -B build -G "Visual Studio 17 2022" -A "${{ matrix.cmake_arch }}" @versionArgs
+          cmake -S . -B build -G "Visual Studio 17 2022" -A "${{ matrix.cmake_arch }}" "-DVELOPACK_ROOT=$env:VELOPACK_ROOT" @versionArgs
 
       - name: Build
         shell: pwsh
@@ -54,7 +63,7 @@ jobs:
       - name: Package Windows ZIP
         shell: pwsh
         run: |
-          $package = Join-Path $pwd "package"
+          $package = Join-Path $pwd "app-${{ matrix.arch }}"
           New-Item -ItemType Directory -Path $package -Force | Out-Null
           $exe = Join-Path $pwd "build/Release/ShutDown.exe"
           Copy-Item $exe (Join-Path $package "ShutDown.exe") -Force
@@ -68,7 +77,7 @@ jobs:
         with:
           name: ShutDown-windows-${{ matrix.arch }}
           path: |
-            package/
+            app-${{ matrix.arch }}/
             ShutDown-windows-${{ matrix.arch }}.exe
             ShutDown-windows-${{ matrix.arch }}.zip
           if-no-files-found: error
@@ -99,6 +108,16 @@ jobs:
             throw "缺少 $notes。请先写好本版本的具体更新说明，避免 Release 显示空泛描述。"
           }
 
+      - name: Build Velopack packages
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          $notes = Join-Path $pwd "release-notes/${{ github.ref_name }}.md"
+          $out = Join-Path $pwd "release/velopack"
+          dotnet tool install --tool-path .vpk vpk --version 1.2.0
+          .\.vpk\vpk pack --packId ShutDown --packVersion $version --packDir release/app-x64 --mainExe ShutDown.exe --runtime win-x64 --channel win-x64 --outputDir $out --releaseNotes $notes --icon resources/app.ico --packTitle ShutDown --packAuthors ShutDown --yes --skip-updates
+          .\.vpk\vpk pack --packId ShutDown --packVersion $version --packDir release/app-x86 --mainExe ShutDown.exe --runtime win-x86 --channel win-x86 --outputDir $out --releaseNotes $notes --icon resources/app.ico --packTitle ShutDown --packAuthors ShutDown --yes --skip-updates
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3.0.2
         with:
@@ -109,3 +128,4 @@ jobs:
             release/ShutDown-windows-x86.exe
             release/ShutDown-windows-x64.zip
             release/ShutDown-windows-x86.zip
+            release/velopack/*

@@ -56,16 +56,25 @@ Win32xx-MIT.txt
 
 GitHub Release 提供：
 
+- `ShutDown-win-x64-Setup.exe`
+- `ShutDown-win-x86-Setup.exe`
+- `ShutDown-win-x64-Portable.zip`
+- `ShutDown-win-x86-Portable.zip`
 - `ShutDown-windows-x64.zip`
 - `ShutDown-windows-x86.zip`
 
-更新器直接读取 GitHub Release API；API 受限时回退到 GitHub Release 页面，并依据当前进程位数选择对应 ZIP，
-不会让 32 位程序下载 x64 包。程序运行时不需要额外 GUI 框架 DLL、平台插件或 OpenSSL DLL。
+推荐使用 `Setup.exe` 安装版。安装版使用 Velopack 管理后续更新，会依据安装时的架构和 channel
+读取对应的 release feed，并由 Velopack 在程序退出后替换文件和重启。
+
+为了兼容旧版本迁移，Release 仍保留 `ShutDown-windows-x64.exe` / `ShutDown-windows-x86.exe`
+以及 ZIP 包；旧更新器会依据当前进程位数选择对应资产，不会让 32 位程序下载 x64 包。程序运行时不需要
+额外 GUI 框架 DLL、平台插件或 OpenSSL DLL。
 
 ## GitHub Actions
 
 `.github/workflows/windows-ci.yml` 会分别构建 x64 和 x86，执行 CTest，并在推送 `v*` 标签时上传两个 ZIP 到 Release。
 workflow 只负责编译、测试、打包和发布当前 tag，不会自动删除旧 Release、旧 tag 或历史版本。
+普通 push 到 `main` 不触发 CI；避免每次 release commit 产生额外的 `chore: release ...` run。
 
 每个版本的 Release 必须同时提供更新说明，文件放在 `release-notes/vX.Y.Z.md`；可复制
 `release-notes/TEMPLATE.md` 创建新版本说明。工作流会把该文件直接作为 GitHub Release 正文；

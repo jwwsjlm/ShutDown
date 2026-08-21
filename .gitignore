@@ -1,6 +1,8 @@
 /build/
 /build-local/
+/build-*/
 /package/
+/tools/
 /.vs/
 /.vscode/
 *.user

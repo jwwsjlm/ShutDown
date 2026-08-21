@@ -8,6 +8,7 @@
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <sstream>
 
 #ifdef _MSC_VER
@@ -174,6 +175,31 @@ std::vector<unsigned char> sha256(const std::vector<unsigned char> &data) {
     BCryptCloseAlgorithmProvider(algorithm, 0);
     return result;
 }
+
+#ifdef SHUTDOWN_USE_VELOPACK
+std::unique_ptr<Velopack::UpdateManager> createVelopackManager() {
+    auto source = std::make_unique<Velopack::GithubSource>("https://github.com/jwwsjlm/ShutDown");
+    return std::make_unique<Velopack::UpdateManager>(std::move(source));
+}
+
+UpdateInfo toNativeUpdateInfo(const Velopack::UpdateInfo &update) {
+    UpdateInfo info;
+    info.version = UpdateManager::normalizeVersion(update.TargetFullRelease.Version);
+    info.tagName = "v" + info.version;
+    info.title = "Velopack Release";
+    info.notes = update.TargetFullRelease.NotesMarkdown;
+    info.assetName = update.TargetFullRelease.FileName;
+    info.downloadUrl = "velopack://github/jwwsjlm/ShutDown/" + update.TargetFullRelease.FileName;
+    return info;
+}
+
+void velopackProgress(void *userData, size_t progress) {
+    auto *callbacks = reinterpret_cast<UpdateManager::Callbacks *>(userData);
+    if (callbacks && callbacks->downloadProgress) {
+        callbacks->downloadProgress(static_cast<std::int64_t>(progress), 100);
+    }
+}
+#endif
 }
 
 UpdateManager::UpdateManager(std::string currentVersion) : m_currentVersion(std::move(currentVersion)) {}
@@ -313,6 +339,28 @@ void UpdateManager::checkForUpdates() {
     joinWorker(); m_cancel = false;
     if (m_callbacks.checkingStarted) m_callbacks.checkingStarted();
     m_worker = std::thread([this] {
+#ifdef SHUTDOWN_USE_VELOPACK
+        try {
+            auto manager = createVelopackManager();
+            if (!manager->IsPortable()) {
+                const auto update = manager->CheckForUpdates();
+                if (m_callbacks.checkingFinished) m_callbacks.checkingFinished();
+                if (update.has_value()) {
+                    {
+                        std::lock_guard<std::mutex> lock(m_velopackMutex);
+                        m_velopackAvailable = update;
+                        m_velopackDownloaded.reset();
+                    }
+                    if (m_callbacks.updateAvailable) m_callbacks.updateAvailable(toNativeUpdateInfo(update.value()));
+                } else if (m_callbacks.noUpdateAvailable) {
+                    m_callbacks.noUpdateAvailable();
+                }
+                return;
+            }
+        } catch (...) {
+            // Raw/portable legacy builds keep using the GitHub asset updater below.
+        }
+#endif
         std::vector<std::string> urls{"https://api.github.com" + std::string(kApiPath),
                                       "https://github.com/jwwsjlm/ShutDown/releases/latest"};
         appendGithubProxyUrls("https://github.com/jwwsjlm/ShutDown/releases/latest", &urls);
@@ -343,6 +391,30 @@ void UpdateManager::checkForUpdates() {
 void UpdateManager::downloadUpdate(const UpdateInfo &info) {
     joinWorker(); m_cancel = false;
     m_worker = std::thread([this, info] {
+#ifdef SHUTDOWN_USE_VELOPACK
+        std::optional<Velopack::UpdateInfo> velopackUpdate;
+        {
+            std::lock_guard<std::mutex> lock(m_velopackMutex);
+            velopackUpdate = m_velopackAvailable;
+        }
+        if (velopackUpdate.has_value() && info.downloadUrl.rfind("velopack://", 0) == 0) {
+            try {
+                auto manager = createVelopackManager();
+                Callbacks callbacks = m_callbacks;
+                manager->DownloadUpdates(velopackUpdate.value(), velopackProgress, &callbacks);
+                {
+                    std::lock_guard<std::mutex> lock(m_velopackMutex);
+                    m_velopackDownloaded = velopackUpdate;
+                }
+                if (m_callbacks.downloadFinished) m_callbacks.downloadFinished(L"velopack");
+            } catch (const std::exception &ex) {
+                if (m_callbacks.downloadError) m_callbacks.downloadError(utf8ToWide(ex.what()));
+            } catch (...) {
+                if (m_callbacks.downloadError) m_callbacks.downloadError(L"Velopack 下载更新失败");
+            }
+            return;
+        }
+#endif
         wchar_t temp[MAX_PATH]{}; GetTempPathW(MAX_PATH, temp);
         const std::filesystem::path dir = std::filesystem::path(temp) / L"ShutDown" / L"update";
         std::error_code ec; std::filesystem::create_directories(dir, ec);
@@ -369,6 +441,30 @@ void UpdateManager::downloadUpdate(const UpdateInfo &info) {
 void UpdateManager::cancelDownload() { m_cancel = true; }
 
 bool UpdateManager::installAndRestart(const std::wstring &downloadedFile, std::wstring *errorMessage) const {
+#ifdef SHUTDOWN_USE_VELOPACK
+    if (downloadedFile == L"velopack") {
+        try {
+            std::optional<Velopack::UpdateInfo> update;
+            {
+                std::lock_guard<std::mutex> lock(m_velopackMutex);
+                update = m_velopackDownloaded.has_value() ? m_velopackDownloaded : m_velopackAvailable;
+            }
+            if (!update.has_value()) {
+                if (errorMessage) *errorMessage = L"没有可安装的 Velopack 更新";
+                return false;
+            }
+            auto manager = createVelopackManager();
+            manager->WaitExitThenApplyUpdates(update.value(), false, true);
+            return true;
+        } catch (const std::exception &ex) {
+            if (errorMessage) *errorMessage = utf8ToWide(ex.what());
+            return false;
+        } catch (...) {
+            if (errorMessage) *errorMessage = L"Velopack 启动更新器失败";
+            return false;
+        }
+    }
+#endif
     wchar_t temp[MAX_PATH]{}; GetTempPathW(MAX_PATH, temp);
     const auto script = std::filesystem::path(temp) / L"ShutDown" / L"update" / L"install.ps1";
     std::wofstream file(script);

@@ -5,9 +5,15 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
+
+#ifdef SHUTDOWN_USE_VELOPACK
+#include "Velopack.hpp"
+#endif
 
 class UpdateManager {
 public:
@@ -46,4 +52,9 @@ private:
     Callbacks m_callbacks;
     std::thread m_worker;
     std::atomic<bool> m_cancel{false};
+#ifdef SHUTDOWN_USE_VELOPACK
+    mutable std::mutex m_velopackMutex;
+    std::optional<Velopack::UpdateInfo> m_velopackAvailable;
+    std::optional<Velopack::UpdateInfo> m_velopackDownloaded;
+#endif
 };

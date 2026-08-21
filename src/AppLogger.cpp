@@ -1,6 +1,7 @@
 #include "AppLogger.h"
 
 #include <QDateTime>
+#include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QMutex>

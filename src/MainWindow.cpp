@@ -26,7 +26,6 @@ enum : int {
 constexpr UINT WM_TRAY = WM_APP + 10;
 constexpr UINT WM_UI_EVENT = WM_APP + 11;
 constexpr UINT TIMER_SCHEDULER = 1;
-constexpr UINT TIMER_AUTO_UPDATE = 2;
 
 HWND control(DWORD exStyle, LPCWSTR cls, LPCWSTR title, DWORD style, int x, int y, int w, int h, HWND parent, int id) {
     return CreateWindowExW(exStyle, cls, title, style, x, y, w, h, parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), GetModuleHandleW(nullptr), nullptr);
@@ -35,31 +34,6 @@ HWND control(DWORD exStyle, LPCWSTR cls, LPCWSTR title, DWORD style, int x, int 
 void setFont(HWND hwnd, HFONT font) { SendMessageW(hwnd, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE); }
 
 bool isChecked(HWND hwnd) { return SendMessageW(hwnd, BM_GETCHECK, 0, 0) == BST_CHECKED; }
-
-std::wstring numberText(HWND hwnd) {
-    wchar_t buffer[64]{}; GetWindowTextW(hwnd, buffer, 64); return buffer;
-}
-
-std::time_t parseDate(const std::wstring &value) {
-    SYSTEMTIME st{}; int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
-    if (swscanf_s(value.c_str(), L"%d-%d-%d %d:%d:%d", &year, &month, &day, &hour, &minute, &second) != 6) return 0;
-    st.wYear = static_cast<WORD>(year); st.wMonth = static_cast<WORD>(month); st.wDay = static_cast<WORD>(day);
-    st.wHour = static_cast<WORD>(hour); st.wMinute = static_cast<WORD>(minute); st.wSecond = static_cast<WORD>(second);
-    FILETIME ft{}; if (!SystemTimeToFileTime(&st, &ft)) return 0;
-    ULARGE_INTEGER value64{}; value64.LowPart = ft.dwLowDateTime; value64.HighPart = ft.dwHighDateTime;
-    return static_cast<std::time_t>(value64.QuadPart / 10000000ULL - 11644473600ULL);
-}
-
-std::wstring formatDateTime(std::time_t target) {
-    std::tm local{}; localtime_s(&local, &target); wchar_t buffer[64]{};
-    swprintf_s(buffer, 64, L"%04d-%02d-%02d %02d:%02d:%02d", local.tm_year + 1900, local.tm_mon + 1, local.tm_mday, local.tm_hour, local.tm_min, local.tm_sec);
-    return buffer;
-}
-
-std::wstring currentPlusHour() {
-    const auto target = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()) + 3600;
-    return formatDateTime(target);
-}
 
 std::time_t pickerDateTime(HWND datePicker, HWND timePicker) {
     SYSTEMTIME st{};

@@ -29,8 +29,15 @@ std::map<std::string, std::string> readValues() {
 }
 
 void writeValues(const std::map<std::string, std::string> &values) {
-    std::ofstream file(settingsPath(), std::ios::binary | std::ios::trunc);
+    const auto destination = settingsPath();
+    auto temporary = destination;
+    temporary += L".tmp";
+    std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
+    if (!file) return;
     for (const auto &entry : values) file << entry.first << '=' << entry.second << '\n';
+    file.flush();
+    file.close();
+    MoveFileExW(temporary.c_str(), destination.wstring().c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
 }
 
 bool boolValue(const std::map<std::string, std::string> &v, const char *key) {

@@ -20,9 +20,13 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     InitCommonControlsEx(&controls);
     AppLogger::initialize();
     const auto mutex = CreateMutexW(nullptr, TRUE, L"Local\\ShutDown.SingleInstance");
-    if (!mutex || GetLastError() == ERROR_ALREADY_EXISTS) {
+    if (!mutex) {
+        MessageBoxW(nullptr, L"无法创建程序互斥锁。", L"定时关机", MB_OK | MB_ICONERROR);
+        return 1;
+    }
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
         MessageBoxW(nullptr, L"程序已经在运行。", L"定时关机", MB_OK | MB_ICONINFORMATION);
-        if (mutex) CloseHandle(mutex);
+        CloseHandle(mutex);
         return 0;
     }
     MainWindow window(SHUTDOWN_VERSION);

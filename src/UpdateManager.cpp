@@ -105,6 +105,11 @@ bool httpGet(const std::string &url, std::vector<unsigned char> *data, std::func
 
     HINTERNET session = WinHttpOpen(L"ShutDown-Updater/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                                     WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!session && GetLastError() == ERROR_INVALID_PARAMETER) {
+        // WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY is not available on Windows 7.
+        session = WinHttpOpen(L"ShutDown-Updater/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                              WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    }
     if (!session) return false;
     // 更新检查要快速失败并切换备用源，避免点击一次长时间无响应。
     WinHttpSetTimeouts(session, 2500, 2500, 2500, 3500);

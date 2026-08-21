@@ -111,7 +111,8 @@ void setPickerDateTime(HWND datePicker, HWND timeEdit, std::time_t target) {
 }
 }
 
-MainWindow::MainWindow(std::string version) : m_updateManager(std::move(version)) {
+MainWindow::MainWindow(std::string version)
+    : m_updateManager(version), m_windowTitle(L"定时关机 v" + utf8ToWide(version)) {
     m_scheduler.setStateCallback([this](ShutdownScheduler::State state) { updateState(state); });
     m_scheduler.setRemainingCallback([this](std::int64_t seconds) { updateRemaining(seconds); });
     m_scheduler.setErrorCallback([this](const std::wstring &message) { ::MessageBoxW(GetHwnd(), message.c_str(), L"关机失败", MB_ICONERROR); });
@@ -140,7 +141,7 @@ void MainWindow::PreCreate(CREATESTRUCT &cs) {
     // hidden in the tray.
     cs.style = WS_VISIBLE | WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
     cs.x = CW_USEDEFAULT; cs.y = CW_USEDEFAULT; cs.cx = 530; cs.cy = 345;
-    cs.lpszName = L"定时关机";
+    cs.lpszName = m_windowTitle.c_str();
 }
 
 HWND MainWindow::CreateMain() {

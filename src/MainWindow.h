@@ -61,6 +61,7 @@ private:
     UpdateManager m_updateManager;
     ShutdownScheduler m_scheduler;
     UpdateInfo m_availableUpdate;
+    std::wstring m_windowTitle;
     HFONT m_font = nullptr;
     NOTIFYICONDATAW m_tray{};
     bool m_trayCreated = false;

@@ -1,6 +1,6 @@
 # ShutDown
 
-轻量级 Windows 定时关机工具，使用 **C++17 + Win32++** 构建，不依赖 Qt、Qt DLL 或 OpenSSL DLL。
+轻量级 Windows 定时关机工具，使用 **C++17 + Win32++** 构建，不依赖额外 GUI 框架 DLL 或 OpenSSL DLL。
 
 ## 功能
 
@@ -16,9 +16,10 @@
 
 ## 构建
 
-依赖：
+支持和依赖：
 
-- Windows 10/11 或 Windows Server
+- 运行目标：Windows 7 SP1、Windows 10、Windows 11
+- Windows 7 检查更新依赖系统可用的 TLS/SHA-2 更新；如果系统过旧，关机功能仍可用，但 HTTPS 更新检查可能失败
 - Visual Studio 2022（含 Desktop C++）
 - CMake 3.16+
 
@@ -59,17 +60,18 @@ GitHub Release 提供：
 - `ShutDown-windows-x86.zip`
 
 更新器直接读取 GitHub Release API；API 受限时回退到 GitHub Release 页面，并依据当前进程位数选择对应 ZIP，
-不会让 32 位程序下载 x64 包。程序运行时不需要 Qt DLL、平台插件或 OpenSSL DLL。
+不会让 32 位程序下载 x64 包。程序运行时不需要额外 GUI 框架 DLL、平台插件或 OpenSSL DLL。
 
 ## GitHub Actions
 
 `.github/workflows/windows-ci.yml` 会分别构建 x64 和 x86，执行 CTest，并在推送 `v*` 标签时上传两个 ZIP 到 Release。
 
 每个版本的 Release 必须同时提供更新说明，文件放在 `release-notes/vX.Y.Z.md`；可复制
-`release-notes/TEMPLATE.md` 创建新版本说明。工作流会把该文件直接作为 GitHub Release 正文，
-即使忘记创建文件也会生成一个兜底说明，不会发布空白 Release。
+`release-notes/TEMPLATE.md` 创建新版本说明。工作流会把该文件直接作为 GitHub Release 正文；
+如果缺少该文件，发布流程会失败，避免发布空泛说明。
 
-发布新版本时同步修改 `CMakeLists.txt` 中的项目版本并创建标签，例如：
+发布新版本时创建标签即可。GitHub Actions 的 tag 构建会自动把程序版本、`FILEVERSION`
+和 `PRODUCTVERSION` 设置为当前标签版本，例如 `v2.0.7` 会生成 `2.0.7.0`：
 
 ```powershell
 git tag v2.0.0

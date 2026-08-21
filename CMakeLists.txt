@@ -1,4 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
+if (POLICY CMP0091)
+    cmake_policy(SET CMP0091 NEW)
+endif()
 
 set(SHUTDOWN_BASE_VERSION 2.0.6)
 set(SHUTDOWN_EFFECTIVE_VERSION "${SHUTDOWN_BASE_VERSION}")
@@ -16,6 +19,7 @@ if (NOT WIN32)
     message(FATAL_ERROR "ShutDown now targets Windows and Win32++ only")
 endif()
 
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -47,7 +51,15 @@ set_source_files_properties("${SHUTDOWN_RC_FILE}" PROPERTIES
 )
 target_include_directories(ShutDown PRIVATE src third_party/win32xx/include)
 target_link_libraries(ShutDown PRIVATE win32xx::win32xx winhttp bcrypt comctl32 shell32 advapi32 user32 gdi32 ole32 uxtheme)
-target_compile_definitions(ShutDown PRIVATE UNICODE _UNICODE NOMINMAX SHUTDOWN_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(ShutDown PRIVATE
+    UNICODE
+    _UNICODE
+    NOMINMAX
+    WINVER=0x0601
+    _WIN32_WINNT=0x0601
+    NTDDI_VERSION=0x06010000
+    SHUTDOWN_VERSION="${PROJECT_VERSION}"
+)
 if (MSVC)
     target_compile_options(ShutDown PRIVATE /utf-8)
 endif()

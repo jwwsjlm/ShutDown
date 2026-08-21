@@ -19,9 +19,26 @@ namespace {
 constexpr char kOwner[] = "jwwsjlm";
 constexpr char kRepository[] = "ShutDown";
 constexpr char kApiPath[] = "/repos/jwwsjlm/ShutDown/releases/latest";
-const std::vector<std::string> kMirrors{
-    "https://gh.jasonzeng.dev/", "https://ghproxy.monkeyray.net/", "https://gh-proxy.com/",
-    "https://cdn.akaere.online/", "https://git.yylx.win/"};
+const std::vector<std::string> kGithubProxyPrefixes{
+    "https://fastly.jsdelivr.net/",
+    "https://testingcf.jsdelivr.net/",
+    "https://cdn.jsdelivr.net/",
+    "https://git.yylx.win/",
+    "https://gh.jasonzeng.dev/",
+    "https://ghproxy.monkeyray.net/",
+    "https://gh-proxy.com/",
+    "https://cdn.akaere.online/"
+};
+
+bool isGithubUrl(const std::string &url) {
+    return url.rfind("https://github.com/", 0) == 0 || url.rfind("http://github.com/", 0) == 0;
+}
+
+void appendGithubProxyUrls(const std::string &githubUrl, std::vector<std::string> *urls) {
+    if (!urls || !isGithubUrl(githubUrl)) return;
+    for (const auto &prefix : kGithubProxyPrefixes) urls->push_back(prefix + githubUrl);
+}
+
 std::wstring utf8ToWide(const std::string &value) {
     if (value.empty()) return {};
     const int size = MultiByteToWideChar(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0);
@@ -90,7 +107,7 @@ bool httpGet(const std::string &url, std::vector<unsigned char> *data, std::func
                                     WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!session) return false;
     // 更新检查要快速失败并切换备用源，避免点击一次长时间无响应。
-    WinHttpSetTimeouts(session, 3500, 3500, 3500, 5000);
+    WinHttpSetTimeouts(session, 2500, 2500, 2500, 3500);
     HINTERNET connection = WinHttpConnect(session, host, components.nPort, 0);
     if (!connection) { WinHttpCloseHandle(session); return false; }
     std::wstring requestPath = path;
@@ -228,7 +245,7 @@ bool UpdateManager::parseRelease(const std::string &object, UpdateInfo *info) {
                 }
             }
         }
-        for (const auto &mirror : kMirrors) info->mirrorUrls.push_back(mirror + info->downloadUrl);
+        appendGithubProxyUrls(info->downloadUrl, &info->mirrorUrls);
         return info->isValid();
     }
     return false;
@@ -270,7 +287,7 @@ bool UpdateManager::parseDescriptor(const std::string &object, UpdateInfo *info)
     const std::string digest = archDigest.empty() ? jsonString(object, "sha256") : archDigest;
     const std::string clean = digest.rfind("sha256:", 0) == 0 ? digest.substr(7) : digest;
     for (size_t i = 0; i + 1 < clean.size(); i += 2) info->sha256.push_back(static_cast<unsigned char>(std::stoi(clean.substr(i, 2), nullptr, 16)));
-    for (const auto &mirror : kMirrors) info->mirrorUrls.push_back(mirror + info->downloadUrl);
+    appendGithubProxyUrls(info->downloadUrl, &info->mirrorUrls);
     return info->isValid();
 }
 
@@ -279,8 +296,8 @@ void UpdateManager::checkForUpdates() {
     if (m_callbacks.checkingStarted) m_callbacks.checkingStarted();
     m_worker = std::thread([this] {
         std::vector<std::string> urls{"https://api.github.com" + std::string(kApiPath),
-                                      "https://github.com/jwwsjlm/ShutDown/releases/latest",
-                                      "https://ghproxy.monkeyray.net/https://github.com/jwwsjlm/ShutDown/releases/latest"};
+                                      "https://github.com/jwwsjlm/ShutDown/releases/latest"};
+        appendGithubProxyUrls("https://github.com/jwwsjlm/ShutDown/releases/latest", &urls);
         std::vector<UpdateInfo> candidates; std::wstring errors;
         bool validSource = false;
         for (const auto &url : urls) {

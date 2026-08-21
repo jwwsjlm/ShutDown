@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 class MainWindow final : public Win32xx::CWnd {
 public:
@@ -19,6 +20,7 @@ protected:
     void PreCreate(CREATESTRUCT &cs) override;
     int OnCreate(CREATESTRUCT &cs) override;
     BOOL OnCommand(WPARAM wparam, LPARAM lparam) override;
+    LRESULT OnNotify(WPARAM wparam, LPARAM lparam) override;
     void OnClose() override;
     void OnDestroy() override;
     LRESULT WndProc(UINT msg, WPARAM wparam, LPARAM lparam) override;
@@ -51,6 +53,8 @@ private:
     bool askCloseWithActiveTask();
     void showFromTray();
     void setSettingsVisible(bool visible);
+    std::wstring currentCountdownText() const;
+    void updateTrayTip();
     static std::wstring formatDuration(std::int64_t seconds);
     void post(UiEvent *event);
 
@@ -74,7 +78,8 @@ private:
     HWND m_pause = nullptr;
     HWND m_checkUpdate = nullptr;
     HWND m_progress = nullptr;
-    HWND m_settings = nullptr;
+    HWND m_tab = nullptr;
     HWND m_settingsGroup = nullptr;
-    HWND m_settingsBack = nullptr;
+    std::vector<HWND> m_mainControls;
+    std::vector<HWND> m_settingsControls;
 };

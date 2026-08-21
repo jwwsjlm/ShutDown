@@ -27,7 +27,7 @@ set(SHUTDOWN_SOURCES
 add_executable(ShutDown WIN32 ${SHUTDOWN_SOURCES})
 target_include_directories(ShutDown PRIVATE src third_party/win32xx/include)
 target_link_libraries(ShutDown PRIVATE win32xx::win32xx winhttp bcrypt comctl32 shell32 advapi32 user32 gdi32 ole32)
-target_compile_definitions(ShutDown PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN SHUTDOWN_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(ShutDown PRIVATE UNICODE _UNICODE NOMINMAX SHUTDOWN_VERSION="${PROJECT_VERSION}")
 if (MSVC)
     target_compile_options(ShutDown PRIVATE /utf-8)
 endif()

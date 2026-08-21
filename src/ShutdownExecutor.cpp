@@ -13,7 +13,7 @@ bool ShutdownExecutor::execute(bool force, std::wstring *errorMessage) {
     HANDLE token = nullptr;
     TOKEN_PRIVILEGES privileges{};
     if (OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token)) {
-        if (LookupPrivilegeValueW(nullptr, SE_SHUTDOWN_NAME, &privileges.Privileges[0].Luid)) {
+        if (LookupPrivilegeValueW(nullptr, L"SeShutdownPrivilege", &privileges.Privileges[0].Luid)) {
             privileges.PrivilegeCount = 1;
             privileges.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
             AdjustTokenPrivileges(token, FALSE, &privileges, 0, nullptr, nullptr);

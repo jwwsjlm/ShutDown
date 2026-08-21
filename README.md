@@ -23,7 +23,19 @@
 - Visual Studio 2022（含 Desktop C++）
 - CMake 3.16+
 
-Win32++ 已 vendor 到 `third_party/win32xx`，CMake 会直接使用，无需额外安装 GUI 框架。
+Win32++ 通过 Git submodule 挂在 `third_party/win32xx`，CMake 会直接使用，无需额外安装 GUI 框架。
+
+首次克隆或普通 `git clone` 后，需要初始化子模块：
+
+```powershell
+git submodule update --init --recursive
+```
+
+也可以直接递归克隆：
+
+```powershell
+git clone --recursive https://github.com/jwwsjlm/ShutDown.git
+```
 
 ```powershell
 cmake -S D:\code\ShutDown -B D:\code\ShutDown\build -G "Visual Studio 17 2022" -A x64

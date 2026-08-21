@@ -29,6 +29,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
+        with:
+          submodules: true
 
       - name: Download Velopack C SDK
         shell: pwsh
@@ -87,6 +89,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
+        with:
+          submodules: true
 
       - name: Download x64 artifact
         uses: actions/download-artifact@v8.0.1

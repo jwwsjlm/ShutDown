@@ -87,7 +87,8 @@ bool httpGet(const std::string &url, std::vector<unsigned char> *data, std::func
     HINTERNET session = WinHttpOpen(L"ShutDown-Updater/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                                     WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!session) return false;
-    WinHttpSetTimeouts(session, 12000, 12000, 12000, 60000);
+    // 更新检查要快速失败并切换备用源，避免点击一次长时间无响应。
+    WinHttpSetTimeouts(session, 3500, 3500, 3500, 5000);
     HINTERNET connection = WinHttpConnect(session, host, components.nPort, 0);
     if (!connection) { WinHttpCloseHandle(session); return false; }
     std::wstring requestPath = path;
@@ -280,9 +281,8 @@ void UpdateManager::checkForUpdates() {
     if (m_callbacks.checkingStarted) m_callbacks.checkingStarted();
     m_worker = std::thread([this] {
         std::vector<std::string> urls{"https://api.github.com" + std::string(kApiPath),
-                                      "https://github.com/jwwsjlm/ShutDown/releases/latest"};
-        for (const auto &mirror : kMirrors) urls.push_back(mirror + "https://api.github.com" + kApiPath);
-        for (const auto &mirror : kMirrors) urls.push_back(mirror + "https://github.com/jwwsjlm/ShutDown/releases/latest");
+                                      "https://github.com/jwwsjlm/ShutDown/releases/latest",
+                                      "https://ghproxy.monkeyray.net/https://github.com/jwwsjlm/ShutDown/releases/latest"};
         std::vector<UpdateInfo> candidates; std::wstring errors;
         bool validSource = false;
         for (const auto &url : urls) {
@@ -294,7 +294,7 @@ void UpdateManager::checkForUpdates() {
                 (text.find("/releases/tag/") != std::string::npos && parseReleasePage(text, &info))) {
                 validSource = true;
                 if (isNewerThanCurrent(info.version)) candidates.push_back(info);
-                if (candidates.empty() && m_callbacks.noUpdateAvailable) { /* continue checking mirrors */ }
+                break;
             } else errors += utf8ToWide(url) + L": JSON 解析失败或缺少当前架构资产\n";
         }
         if (m_callbacks.checkingFinished) m_callbacks.checkingFinished();

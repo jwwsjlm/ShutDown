@@ -50,6 +50,7 @@ private:
     void updateRemaining(std::int64_t seconds);
     bool askCloseWithActiveTask();
     void showFromTray();
+    void setSettingsVisible(bool visible);
     static std::wstring formatDuration(std::int64_t seconds);
     void post(UiEvent *event);
 
@@ -73,4 +74,7 @@ private:
     HWND m_pause = nullptr;
     HWND m_checkUpdate = nullptr;
     HWND m_progress = nullptr;
+    HWND m_settings = nullptr;
+    HWND m_settingsGroup = nullptr;
+    HWND m_settingsBack = nullptr;
 };

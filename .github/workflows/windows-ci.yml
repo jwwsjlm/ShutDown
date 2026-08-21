@@ -19,47 +19,35 @@ jobs:
       matrix:
         include:
           - arch: x64
-            vs_arch: x64
+            qt_arch: win64_msvc2019_64
             cmake_arch: x64
           - arch: x86
-            vs_arch: x86
+            qt_arch: win32_msvc2019
             cmake_arch: Win32
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
 
-      - name: Setup MSVC environment
-        uses: ilammy/msvc-dev-cmd@v1
+      - name: Install Qt 5.15.2
+        uses: jurplel/install-qt-action@v4.3.1
         with:
-          arch: ${{ matrix.vs_arch }}
-
-      - name: Cache static Qt
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/.qt-static/${{ matrix.arch }}
-          key: qt-5.15.2-static-${{ matrix.arch }}-msvc2019-v2
-
-      - name: Build or restore static Qt 5.15.2
-        shell: pwsh
-        env:
-          QT_STATIC_ROOT: ${{ github.workspace }}/.qt-static/${{ matrix.arch }}
-        run: |
-          & "$env:GITHUB_WORKSPACE/scripts/build-static-qt.ps1" `
-            -Architecture "${{ matrix.arch }}" `
-            -InstallRoot "$env:QT_STATIC_ROOT"
-          if ($LASTEXITCODE -ne 0) { throw "Static Qt build failed with exit code $LASTEXITCODE" }
+          version: "5.15.2"
+          host: windows
+          target: desktop
+          arch: ${{ matrix.qt_arch }}
+          dir: "${{ github.workspace }}/Qt"
+          cache: true
+          set-env: true
 
       - name: Configure
         shell: pwsh
-        env:
-          QT_STATIC_ROOT: ${{ github.workspace }}/.qt-static/${{ matrix.arch }}
         run: |
+          if (-not $env:QT_ROOT_DIR) { throw "QT_ROOT_DIR was not provided" }
           cmake -S . -B build `
             -G "Visual Studio 17 2022" `
             -A "${{ matrix.cmake_arch }}" `
-            -DCMAKE_PREFIX_PATH="$env:QT_STATIC_ROOT" `
-            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+            -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
 
       - name: Build
         shell: pwsh
@@ -68,50 +56,51 @@ jobs:
       - name: Test
         shell: pwsh
         run: |
+          $qtBin = Join-Path $env:QT_ROOT_DIR "bin"
+          $env:PATH = "$qtBin;$env:PATH"
           $testExe = Join-Path $pwd "build/tests/Release/ShutDownTests.exe"
+          $updateTestExe = Join-Path $pwd "build/tests/Release/ShutDownUpdateTests.exe"
           if (-not (Test-Path $testExe)) { throw "Test executable not found: $testExe" }
+          if (-not (Test-Path $updateTestExe)) { throw "Update test executable not found: $updateTestExe" }
           & $testExe
-          if ($LASTEXITCODE -ne 0) { throw "Direct test execution failed with exit code $LASTEXITCODE" }
+          if ($LASTEXITCODE -ne 0) { throw "Scheduler test failed" }
+          & $updateTestExe
+          if ($LASTEXITCODE -ne 0) { throw "Update manager test failed" }
           ctest --test-dir build -C Release --output-on-failure --verbose
 
-      - name: Package single executable
+      - name: Package Windows ZIP
         shell: pwsh
-        env:
-          QT_STATIC_ROOT: ${{ github.workspace }}/.qt-static/${{ matrix.arch }}
         run: |
           $package = Join-Path $pwd "package"
           New-Item -ItemType Directory -Path $package -Force | Out-Null
           $exe = Join-Path $pwd "build/Release/ShutDown.exe"
           if (-not (Test-Path $exe)) { throw "Executable not found: $exe" }
-          $releaseExe = Join-Path $package "ShutDown-windows-${{ matrix.arch }}.exe"
-          Copy-Item $exe $releaseExe -Force
-          Copy-Item (Join-Path $pwd "licenses/RELINKING.md") (Join-Path $package "RELINKING.md") -Force
-          $qtLicenses = Join-Path $env:QT_STATIC_ROOT "licenses/Qt"
-          if (Test-Path $qtLicenses) {
-            Copy-Item $qtLicenses (Join-Path $package "Qt-Licenses") -Recurse -Force
-          }
-          $deps = & dumpbin.exe /dependents $releaseExe 2>&1 | Out-String
-          if ($deps -match 'Qt[56]\w+\.dll') {
-            throw "Static package still depends on Qt DLLs: $deps"
-          }
-          Write-Host $deps
+          & "$env:QT_ROOT_DIR/bin/windeployqt.exe" `
+            --release `
+            --no-translations `
+            --compiler-runtime `
+            --dir $package `
+            $exe
+          if ($LASTEXITCODE -ne 0) { throw "windeployqt failed" }
+          Copy-Item (Join-Path $pwd "licenses/Qt-LGPL.md") (Join-Path $package "Qt-LGPL.md") -Force
+          $archive = Join-Path $pwd "ShutDown-windows-${{ matrix.arch }}.zip"
+          Compress-Archive -Path (Join-Path $package '*') -DestinationPath $archive -Force
 
       - name: Upload architecture artifact
         uses: actions/upload-artifact@v7.0.1
         with:
           name: ShutDown-windows-${{ matrix.arch }}
-          path: package/
+          path: |
+            package/
+            ShutDown-windows-${{ matrix.arch }}.zip
           if-no-files-found: error
 
   release:
-    name: Publish Windows release assets
+    name: Publish Windows ZIP release
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: windows-2022
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7.0.1
-
       - name: Download architecture artifacts
         uses: actions/download-artifact@v4
         with:
@@ -119,15 +108,10 @@ jobs:
           merge-multiple: true
           path: release
 
-      - name: Create license archive
-        shell: pwsh
-        run: Compress-Archive -Path release/RELINKING.md,release/Qt-Licenses -DestinationPath release/ShutDown-licenses.zip -Force
-
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3.0.2
         with:
           generate_release_notes: true
           files: |
-            release/ShutDown-windows-x64.exe
-            release/ShutDown-windows-x86.exe
-            release/ShutDown-licenses.zip
+            release/ShutDown-windows-x64.zip
+            release/ShutDown-windows-x86.zip

@@ -47,10 +47,6 @@ target_link_libraries(ShutDown PRIVATE Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VER
 target_include_directories(ShutDown PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_definitions(ShutDown PRIVATE SHUTDOWN_VERSION="${PROJECT_VERSION}")
 
-if (TARGET Qt${QT_VERSION_MAJOR}::QWindowsIntegrationPlugin)
-    target_link_libraries(ShutDown PRIVATE Qt${QT_VERSION_MAJOR}::QWindowsIntegrationPlugin)
-endif()
-
 # All user-facing strings in the Qt UI are UTF-8.  MSVC otherwise uses the
 # active Windows code page for source files without a BOM, which turns Chinese
 # string literals into mojibake in the packaged Windows build.  Keep both the

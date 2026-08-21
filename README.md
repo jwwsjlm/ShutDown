@@ -42,15 +42,15 @@ PowerShell -ExecutionPolicy Bypass -File D:\code\ShutDown\scripts\build.ps1 -Tes
 
 `.github/workflows/windows-ci.yml` 会在 Push、Pull Request 和 `v*` 标签时自动执行：
 
-- 安装 Qt 5.15.2 MSVC 2019 64-bit
+- 安装 Qt 5.15.2 MSVC 2019 x86 / x64
 - 使用 Visual Studio 2022 编译
 - 运行 CTest
-- 分别构建 Windows x86 / x64 静态 Qt 单 exe
-- 对 `v*` 标签自动创建 GitHub Release 并上传两个架构的 exe
+- 使用 `windeployqt` 打包 Qt 运行库
+- 对 `v*` 标签自动创建 GitHub Release 并上传两个架构的 ZIP
 
 发布新版本时，请同步修改 `D:\code\ShutDown\CMakeLists.txt` 中的 `project(... VERSION ...)`，
 然后创建同名标签，例如版本 `1.0.8` 使用标签 `v1.0.8`。Release 需要同时提供
-`ShutDown-windows-x64.exe` 和 `ShutDown-windows-x86.exe`，程序会根据自身架构选择资产，
+`ShutDown-windows-x64.zip` 和 `ShutDown-windows-x86.zip`，程序会根据自身架构选择资产，
 并在确认 SHA-256（如果 GitHub 提供 digest）后下载和安装。
 
 更新检查会并行尝试 GitHub API、jsDelivr 静态源和若干 GitHub 代理；代理仅作为网络回退，
@@ -63,4 +63,4 @@ PowerShell -ExecutionPolicy Bypass -File D:\code\ShutDown\scripts\build.ps1 -Tes
 - `ilammy/msvc-dev-cmd@v1`
 - `actions/upload-artifact@v7.0.1`
 
-部署时执行 Qt 对应版本的 `windeployqt.exe ShutDown.exe`。系统任务和关机 API 可能受本机组策略、UAC、域策略或未保存应用阻止；“强制关闭”应谨慎启用。
+ZIP 包内已包含 Qt 运行库和平台插件，无需用户单独安装 Qt。系统任务和关机 API 可能受本机组策略、UAC、域策略或未保存应用阻止；“强制关闭”应谨慎启用。

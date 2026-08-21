@@ -303,7 +303,6 @@ bool MainWindow::askCloseWithActiveTask() {
 
 void MainWindow::closeEvent(QCloseEvent *event) {
     if (m_scheduler.isActive() && !askCloseWithActiveTask()) { event->ignore(); return; }
-    if (m_tray && m_tray->isVisible() && !m_forceQuit) { hide(); event->ignore(); return; }
     event->accept();
 }
 

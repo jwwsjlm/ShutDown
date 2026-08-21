@@ -8,6 +8,11 @@
 #include <QMessageBox>
 #include <QStandardPaths>
 
+#if defined(QT_STATIC)
+#include <QtPlugin>
+Q_IMPORT_PLUGIN(QWindowsIntegrationPlugin)
+#endif
+
 #ifndef SHUTDOWN_VERSION
 #define SHUTDOWN_VERSION "0.0.0-dev"
 #endif

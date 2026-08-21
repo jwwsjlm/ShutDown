@@ -14,6 +14,7 @@
 #include <QRegularExpression>
 #include <QStandardPaths>
 #include <QStringList>
+#include <QSysInfo>
 #include <QTextStream>
 #include <QTimer>
 #include <QVersionNumber>
@@ -84,7 +85,9 @@ QList<QUrl> UpdateManager::downloadUrls(const UpdateInfo &info) const {
 void UpdateManager::checkForUpdates() {
     if (!m_checkReplies.isEmpty()) return;
     m_checkResults.clear();
+    m_checkErrors.clear();
     m_completedChecks = 0;
+    m_successfulChecks = 0;
     const auto urls = checkUrls();
     m_totalChecks = urls.size();
     emit checkingStarted(m_totalChecks);
@@ -103,13 +106,24 @@ void UpdateManager::checkForUpdates() {
         m_checkReplies.insert(reply, url.toString());
         connect(reply, &QNetworkReply::finished, this, [this, reply] {
             const QString source = m_checkReplies.take(reply);
+            const int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
             if (reply->error() == QNetworkReply::NoError) {
+                const QByteArray body = reply->readAll();
                 UpdateInfo info;
-                if (parseResponse(reply->readAll(), source, &info) && isNewerThanCurrent(info.version)) {
-                    m_checkResults.append({info, source});
+                if (parseResponse(body, source, &info)) {
+                    ++m_successfulChecks;
+                    if (isNewerThanCurrent(info.version)) m_checkResults.append({info, source});
+                } else {
+                    m_checkErrors << QStringLiteral("%1: 无法解析 Release 响应 (HTTP %2)")
+                                         .arg(source)
+                                         .arg(statusCode > 0 ? QString::number(statusCode) : QStringLiteral("未知"));
                 }
             } else {
-                qWarning() << "Update check failed from" << source << reply->errorString();
+                const QString detail = QStringLiteral("%1: HTTP %2, %3")
+                    .arg(source)
+                    .arg(statusCode > 0 ? QString::number(statusCode) : QStringLiteral("未知"), reply->errorString());
+                m_checkErrors << detail;
+                qWarning() << "Update check failed from" << detail;
             }
             reply->deleteLater();
             ++m_completedChecks;
@@ -123,8 +137,14 @@ void UpdateManager::checkForUpdates() {
 
 void UpdateManager::finishChecking() {
     emit checkingFinished();
+    if (m_checkResults.isEmpty() && m_successfulChecks > 0) {
+        emit noUpdateAvailable();
+        return;
+    }
     if (m_checkResults.isEmpty()) {
-        emit checkError(QStringLiteral("未能从 GitHub 或代理源获取有效的 Release 信息。请确认仓库已有 Release，并检查网络连接。"));
+        QString message = QStringLiteral("未能从 GitHub 或代理源获取有效的 Release 信息。");
+        if (!m_checkErrors.isEmpty()) message += QStringLiteral("\n\n") + m_checkErrors.join(QStringLiteral("\n"));
+        emit checkError(message);
         return;
     }
     auto best = m_checkResults.first().info;
@@ -159,11 +179,15 @@ bool UpdateManager::parseRelease(const QJsonObject &object, UpdateInfo *info) co
 
     const auto assets = object.value(QStringLiteral("assets")).toArray();
     QJsonObject selected;
+    const QString archToken = currentArchitectureToken();
+    const QString archMarker = QStringLiteral("-") + archToken;
     for (const auto &value : assets) {
         const auto asset = value.toObject();
         const QString name = asset.value(QStringLiteral("name")).toString();
-        if (name.endsWith(QStringLiteral(".zip"), Qt::CaseInsensitive) || name.endsWith(QStringLiteral(".exe"), Qt::CaseInsensitive)) {
-            if (selected.isEmpty() || name.contains(QStringLiteral("windows"), Qt::CaseInsensitive)) selected = asset;
+        const bool supportedExtension = name.endsWith(QStringLiteral(".zip"), Qt::CaseInsensitive) ||
+                                        name.endsWith(QStringLiteral(".exe"), Qt::CaseInsensitive);
+        if (supportedExtension && name.contains(archMarker, Qt::CaseInsensitive)) {
+            if (selected.isEmpty() || name.endsWith(QStringLiteral(".exe"), Qt::CaseInsensitive)) selected = asset;
         }
     }
     if (selected.isEmpty()) {
@@ -274,6 +298,10 @@ bool UpdateManager::verifyDownloadedFile(const QString &path, const QByteArray &
 
 QString UpdateManager::normalizeVersion(const QString &value) {
     return stripVersionPrefix(value).section(QRegularExpression(QStringLiteral("[-+]")), 0, 0).trimmed();
+}
+
+QString UpdateManager::currentArchitectureToken() {
+    return QSysInfo::WordSize == 32 ? QStringLiteral("x86") : QStringLiteral("x64");
 }
 
 bool UpdateManager::isNewerThanCurrent(const QString &version) {

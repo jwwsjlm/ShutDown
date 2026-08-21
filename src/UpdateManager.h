@@ -61,14 +61,17 @@ private:
     void finishChecking();
     void startNextDownload();
     bool verifyDownloadedFile(const QString &path, const QByteArray &expectedSha256) const;
+    static QString currentArchitectureToken();
     static QString normalizeVersion(const QString &value);
     static bool isNewerThanCurrent(const QString &version);
 
     QNetworkAccessManager m_network;
     QHash<QNetworkReply *, QString> m_checkReplies;
     QList<CheckResult> m_checkResults;
+    QStringList m_checkErrors;
     int m_completedChecks = 0;
     int m_totalChecks = 0;
+    int m_successfulChecks = 0;
 
     UpdateInfo m_downloadInfo;
     QList<QUrl> m_downloadCandidates;

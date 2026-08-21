@@ -62,6 +62,7 @@ private:
     bool m_silentUpdateCheck = false;
     bool m_forceQuit = false;
     HWND m_dateEdit = nullptr;
+    HWND m_timeEdit = nullptr;
     HWND m_hours = nullptr;
     HWND m_minutes = nullptr;
     HWND m_seconds = nullptr;

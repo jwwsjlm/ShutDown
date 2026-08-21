@@ -18,7 +18,7 @@
 
 namespace {
 enum : int {
-    IDC_DATE = 1001, IDC_HOURS, IDC_MINUTES, IDC_SECONDS, IDC_FORCE, IDC_FALLBACK,
+    IDC_DATE = 1001, IDC_TIME, IDC_HOURS, IDC_MINUTES, IDC_SECONDS, IDC_FORCE, IDC_FALLBACK,
     IDC_AT, IDC_COUNTDOWN, IDC_PAUSE, IDC_CANCEL, IDC_NOW, IDC_CHECK, IDC_PROGRESS,
     IDC_STATUS, IDC_REMAINING, ID_TRAY_SHOW = 2001, ID_TRAY_CANCEL, ID_TRAY_CHECK,
     ID_TRAY_NOW, ID_TRAY_EXIT
@@ -59,6 +59,41 @@ std::wstring formatDateTime(std::time_t target) {
 std::wstring currentPlusHour() {
     const auto target = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()) + 3600;
     return formatDateTime(target);
+}
+
+std::wstring currentTimePlusHour() {
+    const auto target = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()) + 3600;
+    std::tm local{}; localtime_s(&local, &target);
+    wchar_t buffer[32]{};
+    swprintf_s(buffer, 32, L"%02d:%02d:%02d", local.tm_hour, local.tm_min, local.tm_sec);
+    return buffer;
+}
+
+std::time_t pickerDateTime(HWND datePicker, const std::wstring &timeText) {
+    SYSTEMTIME st{};
+    if (DateTime_GetSystemtime(datePicker, &st) != GDT_VALID) return 0;
+    int hour = 0, minute = 0, second = 0;
+    if (swscanf_s(timeText.c_str(), L"%d:%d:%d", &hour, &minute, &second) != 3) return 0;
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) return 0;
+    st.wHour = static_cast<WORD>(hour);
+    st.wMinute = static_cast<WORD>(minute);
+    st.wSecond = static_cast<WORD>(second);
+    FILETIME ft{};
+    if (!SystemTimeToFileTime(&st, &ft)) return 0;
+    ULARGE_INTEGER value64{}; value64.LowPart = ft.dwLowDateTime; value64.HighPart = ft.dwHighDateTime;
+    return static_cast<std::time_t>(value64.QuadPart / 10000000ULL - 11644473600ULL);
+}
+
+void setPickerDateTime(HWND datePicker, HWND timeEdit, std::time_t target) {
+    std::tm local{}; localtime_s(&local, &target);
+    SYSTEMTIME st{};
+    st.wYear = static_cast<WORD>(local.tm_year + 1900);
+    st.wMonth = static_cast<WORD>(local.tm_mon + 1);
+    st.wDay = static_cast<WORD>(local.tm_mday);
+    DateTime_SetSystemtime(datePicker, GDT_VALID, &st);
+    wchar_t buffer[32]{};
+    swprintf_s(buffer, 32, L"%02d:%02d:%02d", local.tm_hour, local.tm_min, local.tm_sec);
+    ::SetWindowTextW(timeEdit, buffer);
 }
 }
 
@@ -113,8 +148,10 @@ void MainWindow::createControls() {
     const int left = 20, width = 570;
     auto *groupAt = control(0, L"BUTTON", L"指定日期和时间", BS_GROUPBOX | WS_CHILD | WS_VISIBLE, left, 10, width, 105, GetHwnd(), 0);
     auto *labelAt = control(0, L"STATIC", L"关机时间:", WS_CHILD | WS_VISIBLE, 40, 47, 80, 24, GetHwnd(), 0);
-    m_dateEdit = control(WS_EX_CLIENTEDGE, L"EDIT", currentPlusHour().c_str(), WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 130, 43, 270, 28, GetHwnd(), IDC_DATE);
-    auto *atButton = control(0, L"BUTTON", L"设置定时关机", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 420, 42, 145, 32, GetHwnd(), IDC_AT);
+    m_dateEdit = control(0, DATETIMEPICK_CLASSW, L"", WS_CHILD | WS_VISIBLE | DTS_SHORTDATECENTURYFORMAT, 130, 43, 175, 28, GetHwnd(), IDC_DATE);
+    m_timeEdit = control(WS_EX_CLIENTEDGE, L"EDIT", currentTimePlusHour().c_str(), WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 315, 43, 105, 28, GetHwnd(), IDC_TIME);
+    setPickerDateTime(m_dateEdit, m_timeEdit, std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()) + 3600);
+    auto *atButton = control(0, L"BUTTON", L"设置定时关机", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 430, 42, 135, 32, GetHwnd(), IDC_AT);
     auto *groupCount = control(0, L"BUTTON", L"倒计时关机", BS_GROUPBOX | WS_CHILD | WS_VISIBLE, left, 125, width, 110, GetHwnd(), 0);
     control(0, L"STATIC", L"时长:", WS_CHILD | WS_VISIBLE, 40, 164, 50, 24, GetHwnd(), 0);
     m_hours = control(WS_EX_CLIENTEDGE, L"EDIT", L"0", WS_CHILD | WS_VISIBLE | ES_NUMBER, 95, 160, 60, 28, GetHwnd(), IDC_HOURS);
@@ -138,7 +175,7 @@ void MainWindow::createControls() {
     m_checkUpdate = control(0, L"BUTTON", L"检查更新", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 40, 505, 140, 34, GetHwnd(), IDC_CHECK);
     m_progress = control(0, PROGRESS_CLASSW, L"", WS_CHILD | WS_VISIBLE, 200, 509, 365, 28, GetHwnd(), IDC_PROGRESS);
     SendMessageW(m_progress, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
-    for (HWND child : {groupAt, labelAt, m_dateEdit, atButton, groupCount, m_hours, m_minutes, m_seconds, countButton, groupOptions, m_force, m_fallback, groupStatus, m_status, m_remaining, m_pause, m_checkUpdate, m_progress}) setFont(child, m_font);
+    for (HWND child : {groupAt, labelAt, m_dateEdit, m_timeEdit, atButton, groupCount, m_hours, m_minutes, m_seconds, countButton, groupOptions, m_force, m_fallback, groupStatus, m_status, m_remaining, m_pause, m_checkUpdate, m_progress}) setFont(child, m_font);
     EnumChildWindows(GetHwnd(), [](HWND hwnd, LPARAM font) { setFont(hwnd, reinterpret_cast<HFONT>(font)); return TRUE; }, reinterpret_cast<LPARAM>(m_font));
 }
 
@@ -160,7 +197,9 @@ void MainWindow::setText(HWND controlHandle, const std::wstring &value) { ::SetW
 std::wstring MainWindow::text(HWND controlHandle) const { wchar_t buffer[512]{}; ::GetWindowTextW(controlHandle, buffer, 512); return buffer; }
 
 void MainWindow::scheduleAt() {
-    std::wstring error; if (!m_scheduler.scheduleAt(parseDate(text(m_dateEdit)), isChecked(m_force), isChecked(m_fallback), &error)) ::MessageBoxW(GetHwnd(), error.c_str(), L"设置失败", MB_OK | MB_ICONWARNING);
+    std::wstring error;
+    const auto target = pickerDateTime(m_dateEdit, text(m_timeEdit));
+    if (!m_scheduler.scheduleAt(target, isChecked(m_force), isChecked(m_fallback), &error)) ::MessageBoxW(GetHwnd(), error.c_str(), L"设置失败", MB_OK | MB_ICONWARNING);
 }
 
 void MainWindow::scheduleCountdown() {
@@ -183,9 +222,9 @@ void MainWindow::scheduleCountdown() {
         ::MessageBoxW(GetHwnd(), error.c_str(), L"设置失败", MB_OK | MB_ICONWARNING);
         return;
     }
-    // 倒计时启动后，把预计关机时刻同步显示到上方日期框，方便核对。
+    // 倒计时启动后，把预计关机时刻同步显示到日期选择框和时间框，方便核对。
     const auto target = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()) + seconds;
-    setText(m_dateEdit, formatDateTime(target));
+    setPickerDateTime(m_dateEdit, m_timeEdit, target);
 }
 
 void MainWindow::cancelTask() { m_scheduler.cancel(); }

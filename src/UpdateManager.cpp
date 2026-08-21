@@ -10,8 +10,10 @@
 #include <fstream>
 #include <sstream>
 
+#ifdef _MSC_VER
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "bcrypt.lib")
+#endif
 
 namespace {
 constexpr char kOwner[] = "jwwsjlm";
@@ -144,14 +146,10 @@ std::vector<unsigned char> sha256(const std::vector<unsigned char> &data) {
     if (BCryptCreateHash(algorithm, &hash, object.data(), objectSize, nullptr, 0, 0) == 0 &&
         BCryptHashData(hash, const_cast<PUCHAR>(data.data()), static_cast<ULONG>(data.size()), 0) == 0)
         BCryptFinishHash(hash, result.data(), hashSize, 0);
-    if (hash) BCryptDestroyHash(hash); BCryptCloseAlgorithmProvider(algorithm, 0);
-    return result;
-}
-
-std::string hex(const std::vector<unsigned char> &bytes) {
-    static const char digits[] = "0123456789abcdef";
-    std::string result;
-    for (unsigned char c : bytes) { result += digits[c >> 4]; result += digits[c & 15]; }
+    if (hash) {
+        BCryptDestroyHash(hash);
+    }
+    BCryptCloseAlgorithmProvider(algorithm, 0);
     return result;
 }
 }
@@ -321,7 +319,10 @@ void UpdateManager::downloadUpdate(const UpdateInfo &info) {
             if (httpGet(url, &data, [this](std::int64_t r, std::int64_t t) { if (m_callbacks.downloadProgress) m_callbacks.downloadProgress(r, t); })) {
                 if (info.sha256.empty() || sha256(data) == info.sha256) {
                     std::ofstream file(path, std::ios::binary); file.write(reinterpret_cast<const char *>(data.data()), static_cast<std::streamsize>(data.size()));
-                    if (m_callbacks.downloadFinished) m_callbacks.downloadFinished(path.wstring()); return;
+                    if (m_callbacks.downloadFinished) {
+                        m_callbacks.downloadFinished(path.wstring());
+                    }
+                    return;
                 }
             }
             if (m_cancel) return;
@@ -346,7 +347,15 @@ bool UpdateManager::installAndRestart(const std::wstring &downloadedFile, std::w
     wchar_t modulePath[MAX_PATH]{};
     GetModuleFileNameW(nullptr, modulePath, MAX_PATH);
     std::wstring args = L"-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + script.wstring() + L"\" \"" + std::wstring(modulePath) + L"\" \"" + downloadedFile + L"\" " + std::to_wstring(GetCurrentProcessId());
-    SHELLEXECUTEINFOW info{sizeof(info)}; info.fMask = SEE_MASK_NOCLOSEPROCESS; info.lpFile = L"powershell.exe"; info.lpParameters = args.c_str(); info.nShow = SW_HIDE;
+    SHELLEXECUTEINFOW info{};
+    info.cbSize = sizeof(info);
+    info.fMask = SEE_MASK_NOCLOSEPROCESS;
+    info.lpFile = L"powershell.exe";
+    info.lpParameters = args.c_str();
+    info.nShow = SW_HIDE;
     if (!ShellExecuteExW(&info)) { if (errorMessage) *errorMessage = L"无法启动更新脚本"; return false; }
-    if (info.hProcess) CloseHandle(info.hProcess); return true;
+    if (info.hProcess) {
+        CloseHandle(info.hProcess);
+    }
+    return true;
 }

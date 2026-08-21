@@ -13,8 +13,10 @@
 #include <memory>
 #include <sstream>
 
+#ifdef _MSC_VER
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "shell32.lib")
+#endif
 
 namespace {
 enum : int {
@@ -70,12 +72,12 @@ MainWindow::MainWindow(std::string version) : m_updateManager(std::move(version)
     m_scheduler.setRemainingCallback([this](std::int64_t seconds) { updateRemaining(seconds); });
     m_scheduler.setErrorCallback([this](const std::wstring &message) { ::MessageBoxW(GetHwnd(), message.c_str(), L"关机失败", MB_ICONERROR); });
     UpdateManager::Callbacks callbacks;
-    callbacks.updateAvailable = [this](const UpdateInfo &info) { auto *event = new UiEvent{UiEvent::Type::UpdateAvailable}; event->info = info; post(event); };
-    callbacks.noUpdateAvailable = [this] { post(new UiEvent{UiEvent::Type::NoUpdate}); };
-    callbacks.checkError = [this](const std::wstring &text) { auto *event = new UiEvent{UiEvent::Type::CheckError}; event->text = text; post(event); };
-    callbacks.downloadProgress = [this](std::int64_t r, std::int64_t t) { auto *event = new UiEvent{UiEvent::Type::DownloadProgress}; event->received = r; event->total = t; post(event); };
-    callbacks.downloadFinished = [this](const std::wstring &path) { auto *event = new UiEvent{UiEvent::Type::DownloadFinished}; event->text = path; post(event); };
-    callbacks.downloadError = [this](const std::wstring &text) { auto *event = new UiEvent{UiEvent::Type::DownloadError}; event->text = text; post(event); };
+    callbacks.updateAvailable = [this](const UpdateInfo &info) { auto *event = new UiEvent{}; event->type = UiEvent::Type::UpdateAvailable; event->info = info; post(event); };
+    callbacks.noUpdateAvailable = [this] { auto *event = new UiEvent{}; event->type = UiEvent::Type::NoUpdate; post(event); };
+    callbacks.checkError = [this](const std::wstring &text) { auto *event = new UiEvent{}; event->type = UiEvent::Type::CheckError; event->text = text; post(event); };
+    callbacks.downloadProgress = [this](std::int64_t r, std::int64_t t) { auto *event = new UiEvent{}; event->type = UiEvent::Type::DownloadProgress; event->received = r; event->total = t; post(event); };
+    callbacks.downloadFinished = [this](const std::wstring &path) { auto *event = new UiEvent{}; event->type = UiEvent::Type::DownloadFinished; event->text = path; post(event); };
+    callbacks.downloadError = [this](const std::wstring &text) { auto *event = new UiEvent{}; event->type = UiEvent::Type::DownloadError; event->text = text; post(event); };
     m_updateManager.setCallbacks(std::move(callbacks));
 }
 
@@ -165,7 +167,7 @@ void MainWindow::setSettingsVisible(bool visible) {
 }
 
 void MainWindow::createTray() {
-    m_tray = {sizeof(NOTIFYICONDATAW)}; m_tray.hWnd = GetHwnd(); m_tray.uID = 1; m_tray.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP; m_tray.uCallbackMessage = WM_TRAY; m_tray.hIcon = LoadIconW(nullptr, IDI_APPLICATION); wcscpy_s(m_tray.szTip, L"定时关机");
+    m_tray = NOTIFYICONDATAW{}; m_tray.cbSize = sizeof(NOTIFYICONDATAW); m_tray.hWnd = GetHwnd(); m_tray.uID = 1; m_tray.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP; m_tray.uCallbackMessage = WM_TRAY; m_tray.hIcon = LoadIconW(nullptr, IDI_APPLICATION); wcscpy_s(m_tray.szTip, L"定时关机");
     m_trayCreated = Shell_NotifyIconW(NIM_ADD, &m_tray) == TRUE;
 }
 
@@ -263,7 +265,9 @@ BOOL MainWindow::OnCommand(WPARAM wparam, LPARAM) {
 
 bool MainWindow::askCloseWithActiveTask() {
     const int choice = ::MessageBoxW(GetHwnd(), L"当前存在活动任务。退出时保留任务吗？", L"退出程序", MB_YESNOCANCEL | MB_ICONQUESTION);
-    if (choice == IDCANCEL) return false; if (choice == IDNO) m_scheduler.cancel(); return true;
+    if (choice == IDCANCEL) return false;
+    if (choice == IDNO) m_scheduler.cancel();
+    return true;
 }
 
 void MainWindow::OnClose() { if (!m_forceQuit && m_scheduler.isActive() && !askCloseWithActiveTask()) return; DestroyWindow(GetHwnd()); }

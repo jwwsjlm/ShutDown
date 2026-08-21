@@ -1,19 +1,24 @@
 #include "TaskSchedulerFallback.h"
 
 #include <windows.h>
-#include <array>
 #include <cstdio>
 #include <sstream>
 
 namespace {
 std::wstring run(const std::wstring &command, DWORD *exitCode = nullptr) {
-    std::array<wchar_t, 4096> buffer{};
     std::wstring cmd = command;
-    STARTUPINFOW si{sizeof(si)};
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
     if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
                         nullptr, nullptr, &si, &pi)) return L"CreateProcess failed";
-    WaitForSingleObject(pi.hProcess, 5000);
+    const DWORD waitResult = WaitForSingleObject(pi.hProcess, 10000);
+    if (waitResult == WAIT_TIMEOUT) {
+        TerminateProcess(pi.hProcess, 1);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        return L"系统任务命令超时";
+    }
     DWORD code = STILL_ACTIVE;
     GetExitCodeProcess(pi.hProcess, &code);
     if (exitCode) *exitCode = code;

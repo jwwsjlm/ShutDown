@@ -34,6 +34,8 @@ HWND control(DWORD exStyle, LPCWSTR cls, LPCWSTR title, DWORD style, int x, int 
 
 void setFont(HWND hwnd, HFONT font) { SendMessageW(hwnd, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE); }
 
+bool isChecked(HWND hwnd) { return SendMessageW(hwnd, BM_GETCHECK, 0, 0) == BST_CHECKED; }
+
 std::wstring numberText(HWND hwnd) {
     wchar_t buffer[64]{}; GetWindowTextW(hwnd, buffer, 64); return buffer;
 }
@@ -59,7 +61,7 @@ std::wstring currentPlusHour() {
 MainWindow::MainWindow(std::string version) : m_updateManager(std::move(version)) {
     m_scheduler.setStateCallback([this](ShutdownScheduler::State state) { updateState(state); });
     m_scheduler.setRemainingCallback([this](std::int64_t seconds) { updateRemaining(seconds); });
-    m_scheduler.setErrorCallback([this](const std::wstring &message) { MessageBoxW(GetHwnd(), message.c_str(), L"关机失败", MB_ICONERROR); });
+    m_scheduler.setErrorCallback([this](const std::wstring &message) { ::MessageBoxW(GetHwnd(), message.c_str(), L"关机失败", MB_ICONERROR); });
     UpdateManager::Callbacks callbacks;
     callbacks.updateAvailable = [this](const UpdateInfo &info) { auto *event = new UiEvent{UiEvent::Type::UpdateAvailable}; event->info = info; post(event); };
     callbacks.noUpdateAvailable = [this] { post(new UiEvent{UiEvent::Type::NoUpdate}); };
@@ -89,8 +91,8 @@ HWND MainWindow::CreateMain() { return Create(); }
 int MainWindow::OnCreate(CREATESTRUCT &) {
     m_font = CreateFontW(-18, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
     createControls(); createTray(); restorePersistedTask();
-    SetTimer(GetHwnd(), TIMER_SCHEDULER, 1000, nullptr);
-    SetTimer(GetHwnd(), TIMER_AUTO_UPDATE, 3000, nullptr);
+    ::SetTimer(GetHwnd(), TIMER_SCHEDULER, 1000, nullptr);
+    ::SetTimer(GetHwnd(), TIMER_AUTO_UPDATE, 3000, nullptr);
     return 0;
 }
 
@@ -136,8 +138,8 @@ void MainWindow::destroyTray() { if (m_trayCreated) Shell_NotifyIconW(NIM_DELETE
 
 void MainWindow::restorePersistedTask() {
     if (!SettingsStore::hasTask()) return;
-    if (MessageBoxW(GetHwnd(), L"检测到上次未完成的关机任务，是否恢复？", L"恢复任务", MB_YESNO | MB_ICONQUESTION) == IDYES) {
-        std::wstring error; if (!m_scheduler.restore(SettingsStore::loadTask(), &error) && !error.empty()) MessageBoxW(GetHwnd(), error.c_str(), L"恢复失败", MB_OK | MB_ICONWARNING);
+    if (::MessageBoxW(GetHwnd(), L"检测到上次未完成的关机任务，是否恢复？", L"恢复任务", MB_YESNO | MB_ICONQUESTION) == IDYES) {
+        std::wstring error; if (!m_scheduler.restore(SettingsStore::loadTask(), &error) && !error.empty()) ::MessageBoxW(GetHwnd(), error.c_str(), L"恢复失败", MB_OK | MB_ICONWARNING);
     } else SettingsStore::clearTask();
 }
 
@@ -145,24 +147,24 @@ void MainWindow::setText(HWND controlHandle, const std::wstring &value) { SetWin
 std::wstring MainWindow::text(HWND controlHandle) const { wchar_t buffer[512]{}; GetWindowTextW(controlHandle, buffer, 512); return buffer; }
 
 void MainWindow::scheduleAt() {
-    std::wstring error; if (!m_scheduler.scheduleAt(parseDate(text(m_dateEdit)), Button_GetCheck(m_force) == BST_CHECKED, Button_GetCheck(m_fallback) == BST_CHECKED, &error)) MessageBoxW(GetHwnd(), error.c_str(), L"设置失败", MB_OK | MB_ICONWARNING);
+    std::wstring error; if (!m_scheduler.scheduleAt(parseDate(text(m_dateEdit)), isChecked(m_force), isChecked(m_fallback), &error)) ::MessageBoxW(GetHwnd(), error.c_str(), L"设置失败", MB_OK | MB_ICONWARNING);
 }
 
 void MainWindow::scheduleCountdown() {
     const auto h = _wtoi(text(m_hours).c_str()), m = _wtoi(text(m_minutes).c_str()), s = _wtoi(text(m_seconds).c_str());
-    std::wstring error; if (!m_scheduler.scheduleCountdown(static_cast<std::int64_t>(h) * 3600 + m * 60 + s, Button_GetCheck(m_force) == BST_CHECKED, Button_GetCheck(m_fallback) == BST_CHECKED, &error)) MessageBoxW(GetHwnd(), error.c_str(), L"设置失败", MB_OK | MB_ICONWARNING);
+    std::wstring error; if (!m_scheduler.scheduleCountdown(static_cast<std::int64_t>(h) * 3600 + m * 60 + s, isChecked(m_force), isChecked(m_fallback), &error)) ::MessageBoxW(GetHwnd(), error.c_str(), L"设置失败", MB_OK | MB_ICONWARNING);
 }
 
 void MainWindow::cancelTask() { m_scheduler.cancel(); }
 void MainWindow::togglePause() { m_scheduler.state() == ShutdownScheduler::State::Paused ? m_scheduler.resume() : m_scheduler.pause(); }
 
 void MainWindow::executeNow() {
-    if (MessageBoxW(GetHwnd(), L"立即关机？", L"确认关机", MB_YESNO | MB_ICONWARNING) != IDYES) return;
-    m_scheduler.cancel(); std::wstring error; if (!ShutdownExecutor::execute(Button_GetCheck(m_force) == BST_CHECKED, &error)) MessageBoxW(GetHwnd(), error.c_str(), L"关机失败", MB_OK | MB_ICONERROR);
+    if (::MessageBoxW(GetHwnd(), L"立即关机？", L"确认关机", MB_YESNO | MB_ICONWARNING) != IDYES) return;
+    m_scheduler.cancel(); std::wstring error; if (!ShutdownExecutor::execute(isChecked(m_force), &error)) ::MessageBoxW(GetHwnd(), error.c_str(), L"关机失败", MB_OK | MB_ICONERROR);
 }
 
 void MainWindow::checkForUpdates(bool silent) {
-    m_silentUpdateCheck = silent; EnableWindow(m_checkUpdate, FALSE); setText(m_checkUpdate, L"检查中..."); m_updateManager.checkForUpdates();
+    m_silentUpdateCheck = silent; ::EnableWindow(m_checkUpdate, FALSE); setText(m_checkUpdate, L"检查中..."); m_updateManager.checkForUpdates();
 }
 
 std::wstring MainWindow::formatDuration(std::int64_t seconds) {
@@ -173,27 +175,27 @@ void MainWindow::updateRemaining(std::int64_t seconds) { setText(m_remaining, se
 
 void MainWindow::updateState(ShutdownScheduler::State state) {
     const wchar_t *label = L"空闲"; if (state == ShutdownScheduler::State::Armed) label = L"已设置"; else if (state == ShutdownScheduler::State::Paused) label = L"已暂停"; else if (state == ShutdownScheduler::State::Executing) label = L"正在关机"; else if (state == ShutdownScheduler::State::Completed) label = L"已完成"; else if (state == ShutdownScheduler::State::Error) label = L"失败";
-    setText(m_status, label); EnableWindow(m_pause, m_scheduler.isActive()); setText(m_pause, state == ShutdownScheduler::State::Paused ? L"继续" : L"暂停");
+    setText(m_status, label); ::EnableWindow(m_pause, m_scheduler.isActive()); setText(m_pause, state == ShutdownScheduler::State::Paused ? L"继续" : L"暂停");
 }
 
-void MainWindow::showFromTray() { ShowWindow(GetHwnd(), SW_SHOWNORMAL); SetForegroundWindow(GetHwnd()); }
+void MainWindow::showFromTray() { ::ShowWindow(GetHwnd(), SW_SHOWNORMAL); ::SetForegroundWindow(GetHwnd()); }
 
 void MainWindow::post(UiEvent *event) { if (!PostMessageW(GetHwnd(), WM_UI_EVENT, 0, reinterpret_cast<LPARAM>(event))) delete event; }
 
 void MainWindow::handleEvent(std::unique_ptr<UiEvent> event) {
     switch (event->type) {
     case UiEvent::Type::UpdateAvailable:
-        m_availableUpdate = event->info; EnableWindow(m_checkUpdate, TRUE); setText(m_checkUpdate, L"检查更新"); m_silentUpdateCheck = false;
-        if (MessageBoxW(GetHwnd(), (L"发现新版本 " + std::wstring(event->info.version.begin(), event->info.version.end()) + L"，是否立即下载？").c_str(), L"发现新版本", MB_YESNO | MB_ICONINFORMATION) == IDYES) { SendMessageW(m_progress, PBM_SETPOS, 0, 0); m_updateManager.downloadUpdate(event->info); }
+        m_availableUpdate = event->info; ::EnableWindow(m_checkUpdate, TRUE); setText(m_checkUpdate, L"检查更新"); m_silentUpdateCheck = false;
+        if (::MessageBoxW(GetHwnd(), (L"发现新版本 " + std::wstring(event->info.version.begin(), event->info.version.end()) + L"，是否立即下载？").c_str(), L"发现新版本", MB_YESNO | MB_ICONINFORMATION) == IDYES) { SendMessageW(m_progress, PBM_SETPOS, 0, 0); m_updateManager.downloadUpdate(event->info); }
         break;
-    case UiEvent::Type::NoUpdate: EnableWindow(m_checkUpdate, TRUE); setText(m_checkUpdate, L"检查更新"); if (!m_silentUpdateCheck) MessageBoxW(GetHwnd(), L"当前已经是最新版本。", L"检查更新", MB_OK | MB_ICONINFORMATION); m_silentUpdateCheck = false; break;
-    case UiEvent::Type::CheckError: EnableWindow(m_checkUpdate, TRUE); setText(m_checkUpdate, L"检查更新"); if (!m_silentUpdateCheck) MessageBoxW(GetHwnd(), event->text.c_str(), L"检查更新失败", MB_OK | MB_ICONWARNING); m_silentUpdateCheck = false; break;
+    case UiEvent::Type::NoUpdate: ::EnableWindow(m_checkUpdate, TRUE); setText(m_checkUpdate, L"检查更新"); if (!m_silentUpdateCheck) ::MessageBoxW(GetHwnd(), L"当前已经是最新版本。", L"检查更新", MB_OK | MB_ICONINFORMATION); m_silentUpdateCheck = false; break;
+    case UiEvent::Type::CheckError: ::EnableWindow(m_checkUpdate, TRUE); setText(m_checkUpdate, L"检查更新"); if (!m_silentUpdateCheck) ::MessageBoxW(GetHwnd(), event->text.c_str(), L"检查更新失败", MB_OK | MB_ICONWARNING); m_silentUpdateCheck = false; break;
     case UiEvent::Type::DownloadProgress: if (event->total > 0) SendMessageW(m_progress, PBM_SETPOS, static_cast<WPARAM>(event->received * 100 / event->total), 0); break;
     case UiEvent::Type::DownloadFinished:
         SendMessageW(m_progress, PBM_SETPOS, 100, 0);
-        if (MessageBoxW(GetHwnd(), L"更新包已下载，立即重启安装？", L"安装更新", MB_YESNO | MB_ICONQUESTION) == IDYES) { std::wstring error; if (!m_updateManager.installAndRestart(event->text, &error)) MessageBoxW(GetHwnd(), error.c_str(), L"安装更新失败", MB_OK | MB_ICONERROR); else { m_forceQuit = true; DestroyWindow(GetHwnd()); } }
+        if (::MessageBoxW(GetHwnd(), L"更新包已下载，立即重启安装？", L"安装更新", MB_YESNO | MB_ICONQUESTION) == IDYES) { std::wstring error; if (!m_updateManager.installAndRestart(event->text, &error)) ::MessageBoxW(GetHwnd(), error.c_str(), L"安装更新失败", MB_OK | MB_ICONERROR); else { m_forceQuit = true; DestroyWindow(GetHwnd()); } }
         break;
-    case UiEvent::Type::DownloadError: SendMessageW(m_progress, PBM_SETPOS, 0, 0); MessageBoxW(GetHwnd(), event->text.c_str(), L"下载更新失败", MB_OK | MB_ICONWARNING); break;
+    case UiEvent::Type::DownloadError: SendMessageW(m_progress, PBM_SETPOS, 0, 0); ::MessageBoxW(GetHwnd(), event->text.c_str(), L"下载更新失败", MB_OK | MB_ICONWARNING); break;
     }
 }
 
@@ -203,7 +205,7 @@ BOOL MainWindow::OnCommand(WPARAM wparam, LPARAM) {
 }
 
 bool MainWindow::askCloseWithActiveTask() {
-    const int choice = MessageBoxW(GetHwnd(), L"当前存在活动任务。退出时保留任务吗？", L"退出程序", MB_YESNOCANCEL | MB_ICONQUESTION);
+    const int choice = ::MessageBoxW(GetHwnd(), L"当前存在活动任务。退出时保留任务吗？", L"退出程序", MB_YESNOCANCEL | MB_ICONQUESTION);
     if (choice == IDCANCEL) return false; if (choice == IDNO) m_scheduler.cancel(); return true;
 }
 
@@ -211,9 +213,9 @@ void MainWindow::OnClose() { if (!m_forceQuit && m_scheduler.isActive() && !askC
 void MainWindow::OnDestroy() { destroyTray(); PostQuitMessage(0); }
 
 LRESULT MainWindow::WndProc(UINT msg, WPARAM wparam, LPARAM lparam) {
-    if (msg == WM_TIMER) { if (wparam == TIMER_SCHEDULER) m_scheduler.tick(); else if (wparam == TIMER_AUTO_UPDATE) { KillTimer(GetHwnd(), TIMER_AUTO_UPDATE); checkForUpdates(true); } return 0; }
-    if (msg == WM_SIZE && wparam == SIZE_MINIMIZED) { ShowWindow(GetHwnd(), SW_HIDE); return 0; }
-    if (msg == WM_TRAY && m_trayCreated) { if (lparam == WM_LBUTTONDBLCLK || lparam == WM_LBUTTONUP) showFromTray(); if (lparam == WM_RBUTTONUP) { POINT point{}; GetCursorPos(&point); HMENU menu = CreatePopupMenu(); AppendMenuW(menu, MF_STRING, ID_TRAY_SHOW, L"显示窗口"); AppendMenuW(menu, MF_STRING, ID_TRAY_CANCEL, L"取消任务"); AppendMenuW(menu, MF_STRING, ID_TRAY_CHECK, L"检查更新"); AppendMenuW(menu, MF_STRING, ID_TRAY_NOW, L"立即关机"); AppendMenuW(menu, MF_SEPARATOR, 0, nullptr); AppendMenuW(menu, MF_STRING, ID_TRAY_EXIT, L"退出"); SetForegroundWindow(GetHwnd()); const int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY, point.x, point.y, 0, GetHwnd(), nullptr); DestroyMenu(menu); if (cmd == ID_TRAY_SHOW) showFromTray(); else if (cmd == ID_TRAY_CANCEL) cancelTask(); else if (cmd == ID_TRAY_CHECK) checkForUpdates(); else if (cmd == ID_TRAY_NOW) executeNow(); else if (cmd == ID_TRAY_EXIT) { m_forceQuit = true; DestroyWindow(GetHwnd()); } } return 0; }
+    if (msg == WM_TIMER) { if (wparam == TIMER_SCHEDULER) m_scheduler.tick(); else if (wparam == TIMER_AUTO_UPDATE) { ::KillTimer(GetHwnd(), TIMER_AUTO_UPDATE); checkForUpdates(true); } return 0; }
+    if (msg == WM_SIZE && wparam == SIZE_MINIMIZED) { ::ShowWindow(GetHwnd(), SW_HIDE); return 0; }
+    if (msg == WM_TRAY && m_trayCreated) { if (lparam == WM_LBUTTONDBLCLK || lparam == WM_LBUTTONUP) showFromTray(); if (lparam == WM_RBUTTONUP) { POINT point{}; GetCursorPos(&point); HMENU menu = CreatePopupMenu(); AppendMenuW(menu, MF_STRING, ID_TRAY_SHOW, L"显示窗口"); AppendMenuW(menu, MF_STRING, ID_TRAY_CANCEL, L"取消任务"); AppendMenuW(menu, MF_STRING, ID_TRAY_CHECK, L"检查更新"); AppendMenuW(menu, MF_STRING, ID_TRAY_NOW, L"立即关机"); AppendMenuW(menu, MF_SEPARATOR, 0, nullptr); AppendMenuW(menu, MF_STRING, ID_TRAY_EXIT, L"退出"); ::SetForegroundWindow(GetHwnd()); const int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY, point.x, point.y, 0, GetHwnd(), nullptr); DestroyMenu(menu); if (cmd == ID_TRAY_SHOW) showFromTray(); else if (cmd == ID_TRAY_CANCEL) cancelTask(); else if (cmd == ID_TRAY_CHECK) checkForUpdates(); else if (cmd == ID_TRAY_NOW) executeNow(); else if (cmd == ID_TRAY_EXIT) { m_forceQuit = true; DestroyWindow(GetHwnd()); } } return 0; }
     if (msg == WM_UI_EVENT) { handleEvent(std::unique_ptr<UiEvent>(reinterpret_cast<UiEvent *>(lparam))); return 0; }
     return CWnd::WndProc(msg, wparam, lparam);
 }

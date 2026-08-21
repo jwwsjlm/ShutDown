@@ -8,7 +8,6 @@
 #include <array>
 #include <filesystem>
 #include <fstream>
-#include <regex>
 #include <sstream>
 
 #pragma comment(lib, "winhttp.lib")
@@ -52,33 +51,57 @@ std::string unescapeJson(std::string value) {
 }
 
 std::string jsonString(const std::string &json, const std::string &key) {
-    const std::regex pattern("\\\"" + key + "\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"\\\\])*)\\\"", std::regex::ECMAScript);
-    std::smatch match;
-    if (!std::regex_search(json, match, pattern)) return {};
-    return unescapeJson(match[1].str());
+    const std::string marker = "\"" + key + "\"";
+    size_t position = json.find(marker);
+    if (position == std::string::npos) return {};
+    position = json.find(':', position + marker.size());
+    if (position == std::string::npos) return {};
+    ++position;
+    while (position < json.size() && (json[position] == ' ' || json[position] == '\t' || json[position] == '\r' || json[position] == '\n')) ++position;
+    if (position >= json.size() || json[position] != '\"') return {};
+    ++position;
+    std::string raw;
+    bool escaped = false;
+    for (; position < json.size(); ++position) {
+        const char c = json[position];
+        if (!escaped && c == '\"') break;
+        if (!escaped && c == '\\\\') escaped = true;
+        else escaped = false;
+        raw += c;
+    }
+    return unescapeJson(raw);
 }
 
 bool httpGet(const std::string &url, std::vector<unsigned char> *data, std::function<void(std::int64_t, std::int64_t)> progress = {}) {
-    URL_COMPONENTSA components{};
+    if (!data) return false;
+    data->clear();
+    const std::wstring wideUrl = utf8ToWide(url);
+    URL_COMPONENTSW components{};
     components.dwStructSize = sizeof(components);
-    char host[256]{}, path[2048]{};
-    components.lpszHostName = host; components.dwHostNameLength = sizeof(host);
-    components.lpszUrlPath = path; components.dwUrlPathLength = sizeof(path);
-    if (!WinHttpCrackUrl(url.c_str(), static_cast<DWORD>(url.size()), 0, &components)) return false;
+    wchar_t host[256]{}, path[4096]{}, extra[2048]{};
+    components.lpszHostName = host;
+    components.dwHostNameLength = _countof(host);
+    components.lpszUrlPath = path;
+    components.dwUrlPathLength = _countof(path);
+    components.lpszExtraInfo = extra;
+    components.dwExtraInfoLength = _countof(extra);
+    if (!WinHttpCrackUrlW(wideUrl.c_str(), 0, 0, &components)) return false;
+
     HINTERNET session = WinHttpOpen(L"ShutDown-Updater/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                                     WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!session) return false;
     WinHttpSetTimeouts(session, 12000, 12000, 12000, 60000);
-    const std::wstring wideHost = utf8ToWide(std::string(host, components.dwHostNameLength));
-    HINTERNET connection = WinHttpConnect(session, wideHost.c_str(), components.nPort, 0);
+    HINTERNET connection = WinHttpConnect(session, host, components.nPort, 0);
     if (!connection) { WinHttpCloseHandle(session); return false; }
-    const std::wstring widePath = utf8ToWide(std::string(path, components.dwUrlPathLength));
-    HINTERNET request = WinHttpOpenRequest(connection, L"GET", widePath.c_str(), nullptr,
+    std::wstring requestPath = path;
+    requestPath += extra;
+    HINTERNET request = WinHttpOpenRequest(connection, L"GET", requestPath.c_str(), nullptr,
                                            WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
                                            components.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0);
     if (!request) { WinHttpCloseHandle(connection); WinHttpCloseHandle(session); return false; }
-    WinHttpAddRequestHeaders(request, L"Accept: application/vnd.github+json\r\n", -1, WINHTTP_ADDREQ_FLAG_ADD);
-    const BOOL sent = WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, nullptr, 0, 0, 0) && WinHttpReceiveResponse(request, nullptr);
+    WinHttpAddRequestHeadersW(request, L"Accept: application/vnd.github+json\r\n", -1, WINHTTP_ADDREQ_FLAG_ADD);
+    const BOOL sent = WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, nullptr, 0, 0, 0) &&
+                      WinHttpReceiveResponse(request, nullptr);
     if (!sent) { WinHttpCloseHandle(request); WinHttpCloseHandle(connection); WinHttpCloseHandle(session); return false; }
     DWORD status = 0, statusSize = sizeof(status);
     WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, nullptr, &status, &statusSize, nullptr);
@@ -86,20 +109,23 @@ bool httpGet(const std::string &url, std::vector<unsigned char> *data, std::func
     DWORD contentLength = 0, lengthSize = sizeof(contentLength);
     WinHttpQueryHeaders(request, WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER, nullptr, &contentLength, &lengthSize, nullptr);
     std::int64_t received = 0;
+    bool readOk = true;
     for (;;) {
         DWORD available = 0;
-        if (!WinHttpQueryDataAvailable(request, &available)) break;
+        if (!WinHttpQueryDataAvailable(request, &available)) { readOk = false; break; }
         if (!available) break;
         const size_t oldSize = data->size();
         data->resize(oldSize + available);
         DWORD read = 0;
-        if (!WinHttpReadData(request, data->data() + oldSize, available, &read)) { data->clear(); break; }
+        if (!WinHttpReadData(request, data->data() + oldSize, available, &read)) { readOk = false; data->clear(); break; }
         data->resize(oldSize + read);
         received += read;
         if (progress) progress(received, contentLength);
     }
-    const bool ok = !data->empty();
-    WinHttpCloseHandle(request); WinHttpCloseHandle(connection); WinHttpCloseHandle(session);
+    const bool ok = readOk && !data->empty();
+    WinHttpCloseHandle(request);
+    WinHttpCloseHandle(connection);
+    WinHttpCloseHandle(session);
     return ok;
 }
 
@@ -156,19 +182,50 @@ bool UpdateManager::isNewerThanCurrent(const std::string &version) const {
 
 bool UpdateManager::parseRelease(const std::string &object, UpdateInfo *info) {
     if (!info) return false;
+    *info = UpdateInfo{};
     info->version = normalizeVersion(jsonString(object, "tag_name"));
     info->tagName = jsonString(object, "tag_name");
     info->title = jsonString(object, "name");
     info->notes = jsonString(object, "body");
     if (info->version.empty()) return false;
-    const std::regex asset(R"("name"\s*:\s*"([^"]+)"[\s\S]*?"browser_download_url"\s*:\s*"([^"]+)"[\s\S]*?(?:"digest"\s*:\s*"sha256:([0-9a-fA-F]+)")?)");
-    for (std::sregex_iterator it(object.begin(), object.end(), asset), end; it != end; ++it) {
-        const std::string name = (*it)[1].str();
+
+    size_t cursor = 0;
+    while ((cursor = object.find("\"name\"", cursor)) != std::string::npos) {
+        const size_t nameColon = object.find(':', cursor + 6);
+        if (nameColon == std::string::npos) break;
+        const size_t nameStart = object.find('\"', nameColon + 1);
+        if (nameStart == std::string::npos) break;
+        const size_t nameEnd = object.find('\"', nameStart + 1);
+        if (nameEnd == std::string::npos) break;
+        const std::string name = unescapeJson(object.substr(nameStart + 1, nameEnd - nameStart - 1));
+        cursor = nameEnd + 1;
         if (name.find("-" + currentArchitectureToken()) == std::string::npos) continue;
         if (name.find(".zip") == std::string::npos && name.find(".exe") == std::string::npos) continue;
-        info->assetName = name; info->downloadUrl = (*it)[2].str();
-        const std::string digest = (*it)[3].str();
-        if (!digest.empty()) for (size_t i = 0; i + 1 < digest.size(); i += 2) info->sha256.push_back(static_cast<unsigned char>(std::stoi(digest.substr(i, 2), nullptr, 16)));
+
+        const size_t objectEnd = object.find('}', nameEnd);
+        const size_t urlKey = object.find("\"browser_download_url\"", nameEnd);
+        if (urlKey == std::string::npos || (objectEnd != std::string::npos && urlKey > objectEnd)) continue;
+        const size_t urlColon = object.find(':', urlKey);
+        const size_t urlStart = urlColon == std::string::npos ? std::string::npos : object.find('\"', urlColon + 1);
+        const size_t urlEnd = urlStart == std::string::npos ? std::string::npos : object.find('\"', urlStart + 1);
+        if (urlStart == std::string::npos || urlEnd == std::string::npos) continue;
+        info->assetName = name;
+        info->downloadUrl = unescapeJson(object.substr(urlStart + 1, urlEnd - urlStart - 1));
+
+        const size_t digestKey = object.find("\"digest\"", nameEnd);
+        if (digestKey != std::string::npos && (objectEnd == std::string::npos || digestKey < objectEnd)) {
+            const size_t digestColon = object.find(':', digestKey);
+            const size_t digestStart = digestColon == std::string::npos ? std::string::npos : object.find('\"', digestColon + 1);
+            const size_t digestEnd = digestStart == std::string::npos ? std::string::npos : object.find('\"', digestStart + 1);
+            if (digestStart != std::string::npos && digestEnd != std::string::npos) {
+                std::string digest = object.substr(digestStart + 1, digestEnd - digestStart - 1);
+                if (digest.rfind("sha256:", 0) == 0) digest = digest.substr(7);
+                if (digest.size() == 64) {
+                    for (size_t i = 0; i < digest.size(); i += 2)
+                        info->sha256.push_back(static_cast<unsigned char>(std::stoi(digest.substr(i, 2), nullptr, 16)));
+                }
+            }
+        }
         for (const auto &mirror : kMirrors) info->mirrorUrls.push_back(mirror + info->downloadUrl);
         return info->isValid();
     }

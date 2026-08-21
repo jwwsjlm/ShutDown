@@ -31,8 +31,6 @@ target_compile_definitions(ShutDown PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN
 if (MSVC)
     target_compile_options(ShutDown PRIVATE /utf-8)
 endif()
-set_target_properties(ShutDown PROPERTIES VS_DPI_AWARE "PerMonitorHighDPI")
-
 include(CTest)
 if (BUILD_TESTING)
     add_subdirectory(tests)

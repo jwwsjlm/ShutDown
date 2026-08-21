@@ -64,6 +64,10 @@ GitHub Release 提供：
 
 `.github/workflows/windows-ci.yml` 会分别构建 x64 和 x86，执行 CTest，并在推送 `v*` 标签时上传两个 ZIP 到 Release。
 
+每个版本的 Release 必须同时提供更新说明，文件放在 `release-notes/vX.Y.Z.md`；可复制
+`release-notes/TEMPLATE.md` 创建新版本说明。工作流会把该文件直接作为 GitHub Release 正文，
+即使忘记创建文件也会生成一个兜底说明，不会发布空白 Release。
+
 发布新版本时同步修改 `CMakeLists.txt` 中的项目版本并创建标签，例如：
 
 ```powershell

@@ -71,10 +71,29 @@ jobs:
           merge-multiple: true
           path: release
 
+      - name: Prepare release notes
+        shell: pwsh
+        run: |
+          $notes = Join-Path $pwd "release-notes/${{ github.ref_name }}.md"
+          if (-not (Test-Path $notes)) {
+            New-Item -ItemType Directory -Path (Split-Path $notes) -Force | Out-Null
+            @"
+          ## ShutDown ${{ github.ref_name }}
+
+          本版本包含最新的 Windows x86/x64 构建。详细改动请参阅仓库提交记录。
+
+          ### 发布文件
+
+          - `ShutDown-windows-x64.zip`
+          - `ShutDown-windows-x86.zip`
+          "@ | Set-Content -LiteralPath $notes -Encoding utf8
+          }
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          generate_release_notes: false
+          body_path: release-notes/${{ github.ref_name }}.md
           files: |
             release/ShutDown-windows-x64.zip
             release/ShutDown-windows-x86.zip

@@ -1,6 +1,4 @@
-#define private public
 #include "UpdateManager.h"
-#undef private
 
 #include <QCoreApplication>
 #include <QJsonArray>
@@ -8,10 +6,9 @@
 #include <QSysInfo>
 #include <cstdio>
 
-int main(int argc, char **argv) {
-    QCoreApplication app(argc, argv);
-    Q_UNUSED(app);
-
+class UpdateManagerTest {
+public:
+    static int run() {
     int failures = 0;
     const auto fail = [&failures](const char *message) {
         std::fprintf(stderr, "FAIL: %s\n", message);
@@ -43,5 +40,12 @@ int main(int argc, char **argv) {
     manager.finishChecking();
     if (!noUpdate) fail("valid response without newer version reports no update");
 
-    return failures == 0 ? 0 : 1;
+        return failures == 0 ? 0 : 1;
+    }
+};
+
+int main(int argc, char **argv) {
+    QCoreApplication app(argc, argv);
+    Q_UNUSED(app);
+    return UpdateManagerTest::run();
 }

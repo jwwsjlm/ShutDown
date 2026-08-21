@@ -11,6 +11,7 @@
 
 class QFile;
 class QJsonObject;
+class UpdateManagerTest;
 
 struct UpdateInfo {
     QString version;
@@ -29,6 +30,7 @@ Q_DECLARE_METATYPE(UpdateInfo)
 
 class UpdateManager final : public QObject {
     Q_OBJECT
+    friend class UpdateManagerTest;
 public:
     explicit UpdateManager(QObject *parent = nullptr);
 

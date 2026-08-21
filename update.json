@@ -1,0 +1,10 @@
+{
+  "version": "2.0.2",
+  "tag": "v2.0.2",
+  "title": "Win32++ UI layout and startup fixes",
+  "notes": "修复首次启动隐藏到托盘、界面布局和更新检查提示问题。",
+  "asset_x64": "ShutDown-windows-x64.zip",
+  "download_x64": "https://github.com/jwwsjlm/ShutDown/releases/download/v2.0.2/ShutDown-windows-x64.zip",
+  "asset_x86": "ShutDown-windows-x86.zip",
+  "download_x86": "https://github.com/jwwsjlm/ShutDown/releases/download/v2.0.2/ShutDown-windows-x86.zip"
+}

@@ -245,7 +245,13 @@ bool UpdateManager::parseDescriptor(const std::string &object, UpdateInfo *info)
     info->notes = jsonString(object, "notes"); info->assetName = jsonString(object, "asset");
     info->downloadUrl = jsonString(object, "download");
     if (info->downloadUrl.empty()) info->downloadUrl = jsonString(object, "downloadUrl");
-    const std::string digest = jsonString(object, "sha256");
+    const std::string arch = currentArchitectureToken();
+    const std::string archAsset = jsonString(object, "asset_" + arch);
+    const std::string archDownload = jsonString(object, "download_" + arch);
+    const std::string archDigest = jsonString(object, "sha256_" + arch);
+    if (!archAsset.empty()) info->assetName = archAsset;
+    if (!archDownload.empty()) info->downloadUrl = archDownload;
+    const std::string digest = archDigest.empty() ? jsonString(object, "sha256") : archDigest;
     const std::string clean = digest.rfind("sha256:", 0) == 0 ? digest.substr(7) : digest;
     for (size_t i = 0; i + 1 < clean.size(); i += 2) info->sha256.push_back(static_cast<unsigned char>(std::stoi(clean.substr(i, 2), nullptr, 16)));
     for (const auto &mirror : kMirrors) info->mirrorUrls.push_back(mirror + info->downloadUrl);
@@ -256,11 +262,12 @@ void UpdateManager::checkForUpdates() {
     joinWorker(); m_cancel = false;
     if (m_callbacks.checkingStarted) m_callbacks.checkingStarted();
     m_worker = std::thread([this] {
-        std::vector<std::string> urls{"https://api.github.com" + std::string(kApiPath)};
-        for (const auto &mirror : kMirrors) urls.push_back(mirror + "https://api.github.com" + kApiPath);
+        std::vector<std::string> urls{"https://raw.githubusercontent.com/jwwsjlm/ShutDown/main/update.json"};
         for (const auto &mirror : kJsDelivr) urls.push_back(mirror + "gh/jwwsjlm/ShutDown@main/update.json");
-        urls.push_back("https://raw.githubusercontent.com/jwwsjlm/ShutDown/main/update.json");
+        urls.push_back("https://api.github.com" + std::string(kApiPath));
+        for (const auto &mirror : kMirrors) urls.push_back(mirror + "https://api.github.com" + kApiPath);
         std::vector<UpdateInfo> candidates; std::wstring errors;
+        bool validSource = false;
         for (const auto &url : urls) {
             if (m_cancel) return;
             std::vector<unsigned char> body;
@@ -268,6 +275,7 @@ void UpdateManager::checkForUpdates() {
             const std::string text(body.begin(), body.end()); UpdateInfo info;
             if ((text.find("\"tag_name\"") != std::string::npos && parseRelease(text, &info)) ||
                 (text.find("\"version\"") != std::string::npos && parseDescriptor(text, &info))) {
+                validSource = true;
                 if (isNewerThanCurrent(info.version)) candidates.push_back(info);
                 if (candidates.empty() && m_callbacks.noUpdateAvailable) { /* continue checking mirrors */ }
             } else errors += utf8ToWide(url) + L": JSON 解析失败或缺少当前架构资产\n";
@@ -276,7 +284,7 @@ void UpdateManager::checkForUpdates() {
         if (!candidates.empty()) {
             const auto best = *std::max_element(candidates.begin(), candidates.end(), [](const UpdateInfo &a, const UpdateInfo &b) { return a.version < b.version; });
             if (m_callbacks.updateAvailable) m_callbacks.updateAvailable(best);
-        } else if (errors.empty()) {
+        } else if (validSource || errors.empty()) {
             if (m_callbacks.noUpdateAvailable) m_callbacks.noUpdateAvailable();
         } else if (m_callbacks.checkError) m_callbacks.checkError(L"未能从 GitHub 或代理源获取有效的 Release 信息。\n\n" + errors);
     });

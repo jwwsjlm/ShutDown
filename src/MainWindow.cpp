@@ -81,49 +81,58 @@ void MainWindow::PreRegisterClass(WNDCLASS &wc) {
 }
 
 void MainWindow::PreCreate(CREATESTRUCT &cs) {
-    cs.style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
-    cs.x = CW_USEDEFAULT; cs.y = CW_USEDEFAULT; cs.cx = 520; cs.cy = 560;
+    // Win32++ removes WS_VISIBLE before CreateWindowEx and restores it only
+    // when it is present in CREATESTRUCT. Without it the first launch stayed
+    // hidden in the tray.
+    cs.style = WS_VISIBLE | WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
+    cs.x = CW_USEDEFAULT; cs.y = CW_USEDEFAULT; cs.cx = 620; cs.cy = 620;
     cs.lpszName = L"定时关机";
 }
 
-HWND MainWindow::CreateMain() { return Create(); }
+HWND MainWindow::CreateMain() {
+    const HWND hwnd = Create();
+    if (hwnd) {
+        ::ShowWindow(hwnd, SW_SHOWNORMAL);
+        ::UpdateWindow(hwnd);
+    }
+    return hwnd;
+}
 
 int MainWindow::OnCreate(CREATESTRUCT &) {
-    m_font = CreateFontW(-18, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
+    m_font = CreateFontW(-14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
     createControls(); createTray(); restorePersistedTask();
     ::SetTimer(GetHwnd(), TIMER_SCHEDULER, 1000, nullptr);
-    ::SetTimer(GetHwnd(), TIMER_AUTO_UPDATE, 3000, nullptr);
     return 0;
 }
 
 void MainWindow::createControls() {
-    const int left = 18, width = 480;
-    auto *groupAt = control(0, L"BUTTON", L"指定日期和时间", BS_GROUPBOX | WS_CHILD | WS_VISIBLE, left, 10, width, 95, GetHwnd(), 0);
-    auto *labelAt = control(0, L"STATIC", L"关机时间:", WS_CHILD | WS_VISIBLE, 35, 40, 80, 24, GetHwnd(), 0);
-    m_dateEdit = control(WS_EX_CLIENTEDGE, L"EDIT", currentPlusHour().c_str(), WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 120, 37, 210, 28, GetHwnd(), IDC_DATE);
-    auto *atButton = control(0, L"BUTTON", L"设置定时关机", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 340, 36, 130, 30, GetHwnd(), IDC_AT);
-    auto *groupCount = control(0, L"BUTTON", L"倒计时关机", BS_GROUPBOX | WS_CHILD | WS_VISIBLE, left, 115, width, 100, GetHwnd(), 0);
-    control(0, L"STATIC", L"时长:", WS_CHILD | WS_VISIBLE, 35, 145, 50, 24, GetHwnd(), 0);
-    m_hours = control(WS_EX_CLIENTEDGE, L"EDIT", L"0", WS_CHILD | WS_VISIBLE | ES_NUMBER, 90, 142, 55, 28, GetHwnd(), IDC_HOURS);
-    m_minutes = control(WS_EX_CLIENTEDGE, L"EDIT", L"0", WS_CHILD | WS_VISIBLE | ES_NUMBER, 170, 142, 55, 28, GetHwnd(), IDC_MINUTES);
-    m_seconds = control(WS_EX_CLIENTEDGE, L"EDIT", L"0", WS_CHILD | WS_VISIBLE | ES_NUMBER, 250, 142, 55, 28, GetHwnd(), IDC_SECONDS);
-    control(0, L"STATIC", L"时", WS_CHILD | WS_VISIBLE, 148, 145, 20, 24, GetHwnd(), 0);
-    control(0, L"STATIC", L"分", WS_CHILD | WS_VISIBLE, 228, 145, 20, 24, GetHwnd(), 0);
-    control(0, L"STATIC", L"秒", WS_CHILD | WS_VISIBLE, 308, 145, 20, 24, GetHwnd(), 0);
-    auto *countButton = control(0, L"BUTTON", L"开始倒计时", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 340, 141, 130, 30, GetHwnd(), IDC_COUNTDOWN);
-    auto *groupOptions = control(0, L"BUTTON", L"选项", BS_GROUPBOX | WS_CHILD | WS_VISIBLE, left, 225, width, 75, GetHwnd(), 0);
-    m_force = control(0, L"BUTTON", L"强制关闭应用（可能丢失未保存数据）", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 35, 248, 300, 24, GetHwnd(), IDC_FORCE);
-    m_fallback = control(0, L"BUTTON", L"启用 Task Scheduler 系统兜底", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 35, 273, 260, 24, GetHwnd(), IDC_FALLBACK);
-    auto *groupStatus = control(0, L"BUTTON", L"当前任务", BS_GROUPBOX | WS_CHILD | WS_VISIBLE, left, 310, width, 75, GetHwnd(), 0);
-    control(0, L"STATIC", L"状态:", WS_CHILD | WS_VISIBLE, 35, 333, 60, 24, GetHwnd(), 0);
-    m_status = control(0, L"STATIC", L"空闲", WS_CHILD | WS_VISIBLE, 100, 333, 160, 24, GetHwnd(), IDC_STATUS);
-    control(0, L"STATIC", L"剩余时间:", WS_CHILD | WS_VISIBLE, 280, 333, 80, 24, GetHwnd(), 0);
-    m_remaining = control(0, L"STATIC", L"--", WS_CHILD | WS_VISIBLE, 365, 333, 100, 24, GetHwnd(), IDC_REMAINING);
-    m_pause = control(0, L"BUTTON", L"暂停", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_DISABLED, 35, 400, 105, 32, GetHwnd(), IDC_PAUSE);
-    control(0, L"BUTTON", L"取消任务", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 155, 400, 105, 32, GetHwnd(), IDC_CANCEL);
-    control(0, L"BUTTON", L"立即关机", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 275, 400, 105, 32, GetHwnd(), IDC_NOW);
-    m_checkUpdate = control(0, L"BUTTON", L"检查更新", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 35, 455, 120, 32, GetHwnd(), IDC_CHECK);
-    m_progress = control(0, PROGRESS_CLASSW, L"", WS_CHILD | WS_VISIBLE, 165, 457, 300, 28, GetHwnd(), IDC_PROGRESS);
+    const int left = 20, width = 570;
+    auto *groupAt = control(0, L"BUTTON", L"指定日期和时间", BS_GROUPBOX | WS_CHILD | WS_VISIBLE, left, 10, width, 105, GetHwnd(), 0);
+    auto *labelAt = control(0, L"STATIC", L"关机时间:", WS_CHILD | WS_VISIBLE, 40, 47, 80, 24, GetHwnd(), 0);
+    m_dateEdit = control(WS_EX_CLIENTEDGE, L"EDIT", currentPlusHour().c_str(), WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 130, 43, 270, 28, GetHwnd(), IDC_DATE);
+    auto *atButton = control(0, L"BUTTON", L"设置定时关机", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 420, 42, 145, 32, GetHwnd(), IDC_AT);
+    auto *groupCount = control(0, L"BUTTON", L"倒计时关机", BS_GROUPBOX | WS_CHILD | WS_VISIBLE, left, 125, width, 110, GetHwnd(), 0);
+    control(0, L"STATIC", L"时长:", WS_CHILD | WS_VISIBLE, 40, 164, 50, 24, GetHwnd(), 0);
+    m_hours = control(WS_EX_CLIENTEDGE, L"EDIT", L"0", WS_CHILD | WS_VISIBLE | ES_NUMBER, 95, 160, 60, 28, GetHwnd(), IDC_HOURS);
+    m_minutes = control(WS_EX_CLIENTEDGE, L"EDIT", L"0", WS_CHILD | WS_VISIBLE | ES_NUMBER, 185, 160, 60, 28, GetHwnd(), IDC_MINUTES);
+    m_seconds = control(WS_EX_CLIENTEDGE, L"EDIT", L"0", WS_CHILD | WS_VISIBLE | ES_NUMBER, 275, 160, 60, 28, GetHwnd(), IDC_SECONDS);
+    control(0, L"STATIC", L"时", WS_CHILD | WS_VISIBLE, 158, 164, 20, 24, GetHwnd(), 0);
+    control(0, L"STATIC", L"分", WS_CHILD | WS_VISIBLE, 248, 164, 20, 24, GetHwnd(), 0);
+    control(0, L"STATIC", L"秒", WS_CHILD | WS_VISIBLE, 338, 164, 20, 24, GetHwnd(), 0);
+    auto *countButton = control(0, L"BUTTON", L"开始倒计时", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 420, 159, 145, 32, GetHwnd(), IDC_COUNTDOWN);
+    auto *groupOptions = control(0, L"BUTTON", L"选项", BS_GROUPBOX | WS_CHILD | WS_VISIBLE, left, 245, width, 85, GetHwnd(), 0);
+    m_force = control(0, L"BUTTON", L"强制关闭应用（可能丢失未保存数据）", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 40, 267, 500, 24, GetHwnd(), IDC_FORCE);
+    m_fallback = control(0, L"BUTTON", L"启用 Task Scheduler 系统兜底", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 40, 295, 400, 24, GetHwnd(), IDC_FALLBACK);
+    auto *groupStatus = control(0, L"BUTTON", L"当前任务", BS_GROUPBOX | WS_CHILD | WS_VISIBLE, left, 340, width, 85, GetHwnd(), 0);
+    control(0, L"STATIC", L"状态:", WS_CHILD | WS_VISIBLE, 40, 368, 60, 24, GetHwnd(), 0);
+    m_status = control(0, L"STATIC", L"空闲", WS_CHILD | WS_VISIBLE, 105, 368, 190, 24, GetHwnd(), IDC_STATUS);
+    control(0, L"STATIC", L"剩余时间:", WS_CHILD | WS_VISIBLE, 330, 368, 80, 24, GetHwnd(), 0);
+    m_remaining = control(0, L"STATIC", L"--", WS_CHILD | WS_VISIBLE, 420, 368, 145, 24, GetHwnd(), IDC_REMAINING);
+    m_pause = control(0, L"BUTTON", L"暂停", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_DISABLED, 40, 450, 120, 34, GetHwnd(), IDC_PAUSE);
+    control(0, L"BUTTON", L"取消任务", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 180, 450, 120, 34, GetHwnd(), IDC_CANCEL);
+    control(0, L"BUTTON", L"立即关机", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 320, 450, 120, 34, GetHwnd(), IDC_NOW);
+    m_checkUpdate = control(0, L"BUTTON", L"检查更新", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 40, 505, 140, 34, GetHwnd(), IDC_CHECK);
+    m_progress = control(0, PROGRESS_CLASSW, L"", WS_CHILD | WS_VISIBLE, 200, 509, 365, 28, GetHwnd(), IDC_PROGRESS);
     SendMessageW(m_progress, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
     for (HWND child : {groupAt, labelAt, m_dateEdit, atButton, groupCount, m_hours, m_minutes, m_seconds, countButton, groupOptions, m_force, m_fallback, groupStatus, m_status, m_remaining, m_pause, m_checkUpdate, m_progress}) setFont(child, m_font);
     EnumChildWindows(GetHwnd(), [](HWND hwnd, LPARAM font) { setFont(hwnd, reinterpret_cast<HFONT>(font)); return TRUE; }, reinterpret_cast<LPARAM>(m_font));
@@ -213,7 +222,7 @@ void MainWindow::OnClose() { if (!m_forceQuit && m_scheduler.isActive() && !askC
 void MainWindow::OnDestroy() { destroyTray(); PostQuitMessage(0); }
 
 LRESULT MainWindow::WndProc(UINT msg, WPARAM wparam, LPARAM lparam) {
-    if (msg == WM_TIMER) { if (wparam == TIMER_SCHEDULER) m_scheduler.tick(); else if (wparam == TIMER_AUTO_UPDATE) { ::KillTimer(GetHwnd(), TIMER_AUTO_UPDATE); checkForUpdates(true); } return 0; }
+    if (msg == WM_TIMER) { if (wparam == TIMER_SCHEDULER) m_scheduler.tick(); return 0; }
     if (msg == WM_SIZE && wparam == SIZE_MINIMIZED) { ::ShowWindow(GetHwnd(), SW_HIDE); return 0; }
     if (msg == WM_TRAY && m_trayCreated) { if (lparam == WM_LBUTTONDBLCLK || lparam == WM_LBUTTONUP) showFromTray(); if (lparam == WM_RBUTTONUP) { POINT point{}; GetCursorPos(&point); HMENU menu = CreatePopupMenu(); AppendMenuW(menu, MF_STRING, ID_TRAY_SHOW, L"显示窗口"); AppendMenuW(menu, MF_STRING, ID_TRAY_CANCEL, L"取消任务"); AppendMenuW(menu, MF_STRING, ID_TRAY_CHECK, L"检查更新"); AppendMenuW(menu, MF_STRING, ID_TRAY_NOW, L"立即关机"); AppendMenuW(menu, MF_SEPARATOR, 0, nullptr); AppendMenuW(menu, MF_STRING, ID_TRAY_EXIT, L"退出"); ::SetForegroundWindow(GetHwnd()); const int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY, point.x, point.y, 0, GetHwnd(), nullptr); DestroyMenu(menu); if (cmd == ID_TRAY_SHOW) showFromTray(); else if (cmd == ID_TRAY_CANCEL) cancelTask(); else if (cmd == ID_TRAY_CHECK) checkForUpdates(); else if (cmd == ID_TRAY_NOW) executeNow(); else if (cmd == ID_TRAY_EXIT) { m_forceQuit = true; DestroyWindow(GetHwnd()); } } return 0; }
     if (msg == WM_UI_EVENT) { handleEvent(std::unique_ptr<UiEvent>(reinterpret_cast<UiEvent *>(lparam))); return 0; }

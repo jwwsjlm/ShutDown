@@ -23,6 +23,11 @@ int main() {
     if (!hasMirror("https://testingcf.jsdelivr.net/")) fail("testingcf jsdelivr mirror");
     if (!hasMirror("https://cdn.jsdelivr.net/")) fail("cdn jsdelivr mirror");
     if (!hasMirror("https://git.yylx.win/")) fail("git yylx mirror");
+    const std::string exeRelease = R"({"tag_name":"v2.0.9","assets":[{"name":"ShutDown-windows-x64.zip","browser_download_url":"https://github.com/jwwsjlm/ShutDown/releases/download/v2.0.9/ShutDown-windows-x64.zip"},{"name":"ShutDown-windows-x64.exe","browser_download_url":"https://github.com/jwwsjlm/ShutDown/releases/download/v2.0.9/ShutDown-windows-x64.exe"},{"name":"ShutDown-windows-x86.zip","browser_download_url":"https://github.com/jwwsjlm/ShutDown/releases/download/v2.0.9/ShutDown-windows-x86.zip"},{"name":"ShutDown-windows-x86.exe","browser_download_url":"https://github.com/jwwsjlm/ShutDown/releases/download/v2.0.9/ShutDown-windows-x86.exe"}]})";
+    UpdateInfo exeInfo;
+    if (!UpdateManager::parseRelease(exeRelease, &exeInfo)) fail("exe release parse");
+    const std::string expectedExe = UpdateManager::currentArchitectureToken() == "x64" ? "ShutDown-windows-x64.exe" : "ShutDown-windows-x86.exe";
+    if (exeInfo.assetName != expectedExe) fail("prefer direct exe asset");
     const std::string page = "<a href=\"/jwwsjlm/ShutDown/releases/tag/v2.0.2\">v2.0.2</a> ShutDown-windows-" + UpdateManager::currentArchitectureToken() + ".zip";
     UpdateInfo pageInfo;
     if (!UpdateManager::parseReleasePage(page, &pageInfo) || pageInfo.version != "2.0.2") fail("release page parse");

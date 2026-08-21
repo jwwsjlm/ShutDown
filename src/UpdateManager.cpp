@@ -55,7 +55,7 @@ std::string unescapeJson(std::string value) {
         const char c = value[++i];
         switch (c) {
         case 'n': output += '\n'; break;
-        case 'r': output += '\r'; break;
+        case 'r': output += '\n'; break;
         case 't': output += '\t'; break;
         case '"': output += '"'; break;
         case '\\': output += '\\'; break;
@@ -73,7 +73,7 @@ std::string jsonString(const std::string &json, const std::string &key) {
     position = json.find(':', position + marker.size());
     if (position == std::string::npos) return {};
     ++position;
-    while (position < json.size() && (json[position] == ' ' || json[position] == '\t' || json[position] == '\r' || json[position] == '\n')) ++position;
+    while (position < json.size() && (json[position] == ' ' || json[position] == '\t' || json[position] == '\n' || json[position] == '\n')) ++position;
     if (position >= json.size() || json[position] != '\"') return {};
     ++position;
     std::string raw;
@@ -127,7 +127,7 @@ bool httpGet(const std::string &url, std::vector<unsigned char> *data, std::func
                           WINHTTP_FLAG_SECURE_PROTOCOL_TLS1;
         WinHttpSetOption(request, WINHTTP_OPTION_SECURE_PROTOCOLS, &protocols, sizeof(protocols));
     }
-    WinHttpAddRequestHeaders(request, L"Accept: application/vnd.github+json\r\n", -1, WINHTTP_ADDREQ_FLAG_ADD);
+    WinHttpAddRequestHeaders(request, L"Accept: application/vnd.github+json\n", -1, WINHTTP_ADDREQ_FLAG_ADD);
     const BOOL sent = WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, nullptr, 0, 0, 0) &&
                       WinHttpReceiveResponse(request, nullptr);
     if (!sent) { WinHttpCloseHandle(request); WinHttpCloseHandle(connection); WinHttpCloseHandle(session); return false; }
@@ -213,6 +213,7 @@ bool UpdateManager::parseRelease(const std::string &object, UpdateInfo *info) {
     info->notes = jsonString(object, "body");
     if (info->version.empty()) return false;
 
+    UpdateInfo zipCandidate;
     size_t cursor = 0;
     while ((cursor = object.find("\"name\"", cursor)) != std::string::npos) {
         const size_t nameColon = object.find(':', cursor + 6);
@@ -233,8 +234,9 @@ bool UpdateManager::parseRelease(const std::string &object, UpdateInfo *info) {
         const size_t urlStart = urlColon == std::string::npos ? std::string::npos : object.find('\"', urlColon + 1);
         const size_t urlEnd = urlStart == std::string::npos ? std::string::npos : object.find('\"', urlStart + 1);
         if (urlStart == std::string::npos || urlEnd == std::string::npos) continue;
-        info->assetName = name;
-        info->downloadUrl = unescapeJson(object.substr(urlStart + 1, urlEnd - urlStart - 1));
+        UpdateInfo candidate = *info;
+        candidate.assetName = name;
+        candidate.downloadUrl = unescapeJson(object.substr(urlStart + 1, urlEnd - urlStart - 1));
 
         const size_t digestKey = object.find("\"digest\"", nameEnd);
         if (digestKey != std::string::npos && (objectEnd == std::string::npos || digestKey < objectEnd)) {
@@ -246,12 +248,20 @@ bool UpdateManager::parseRelease(const std::string &object, UpdateInfo *info) {
                 if (digest.rfind("sha256:", 0) == 0) digest = digest.substr(7);
                 if (digest.size() == 64) {
                     for (size_t i = 0; i < digest.size(); i += 2)
-                        info->sha256.push_back(static_cast<unsigned char>(std::stoi(digest.substr(i, 2), nullptr, 16)));
+                        candidate.sha256.push_back(static_cast<unsigned char>(std::stoi(digest.substr(i, 2), nullptr, 16)));
                 }
             }
         }
-        appendGithubProxyUrls(info->downloadUrl, &info->mirrorUrls);
-        return info->isValid();
+        appendGithubProxyUrls(candidate.downloadUrl, &candidate.mirrorUrls);
+        if (name.find(".exe") != std::string::npos) {
+            *info = candidate;
+            return info->isValid();
+        }
+        if (!zipCandidate.isValid()) zipCandidate = candidate;
+    }
+    if (zipCandidate.isValid()) {
+        *info = zipCandidate;
+        return true;
     }
     return false;
 }
@@ -269,8 +279,11 @@ bool UpdateManager::parseReleasePage(const std::string &html, UpdateInfo *info) 
     info->tagName = html.substr(tagStart, tagEnd - tagStart);
     info->version = normalizeVersion(info->tagName);
     info->title = "GitHub Release";
-    const std::string asset = "ShutDown-windows-" + currentArchitectureToken() + ".zip";
-    if (html.find(asset) == std::string::npos) return false;
+    std::string asset = "ShutDown-windows-" + currentArchitectureToken() + ".exe";
+    if (html.find(asset) == std::string::npos) {
+        asset = "ShutDown-windows-" + currentArchitectureToken() + ".zip";
+        if (html.find(asset) == std::string::npos) return false;
+    }
     info->assetName = asset;
     info->downloadUrl = "https://github.com/jwwsjlm/ShutDown/releases/download/" + info->tagName + "/" + asset;
     return info->isValid();
@@ -360,11 +373,34 @@ bool UpdateManager::installAndRestart(const std::wstring &downloadedFile, std::w
     const auto script = std::filesystem::path(temp) / L"ShutDown" / L"update" / L"install.ps1";
     std::wofstream file(script);
     if (!file) { if (errorMessage) *errorMessage = L"无法创建更新脚本"; return false; }
-    file << L"$ErrorActionPreference='Stop'\n$current=$args[0];$downloaded=$args[1];$pid=[int]$args[2]\n"
-            L"while(Get-Process -Id $pid -ErrorAction SilentlyContinue){Start-Sleep -Milliseconds 500}\n"
+    file << L"$ErrorActionPreference='Stop'\n"
+            L"$current=$args[0];$downloaded=$args[1];$targetProcessId=[int]$args[2]\n"
+            L"$logDir=Join-Path ([IO.Path]::GetTempPath()) 'ShutDown\\update'\n"
+            L"New-Item -ItemType Directory -Path $logDir -Force | Out-Null\n"
+            L"$log=Join-Path $logDir 'install.log'\n"
+            L"function Write-Log($message){Add-Content -LiteralPath $log -Encoding UTF8 -Value ((Get-Date).ToString('s')+' '+$message)}\n"
+            L"try{\n"
+            L"Write-Log \"install start current=$current downloaded=$downloaded pid=$targetProcessId\"\n"
+            L"while(Get-Process -Id $targetProcessId -ErrorAction SilentlyContinue){Start-Sleep -Milliseconds 500}\n"
             L"$work=Join-Path ([IO.Path]::GetTempPath()) ('ShutDown-update-'+[guid]::NewGuid())\n"
-            L"$source=$downloaded;if([IO.Path]::GetExtension($downloaded)-ieq '.zip'){Expand-Archive $downloaded $work -Force;$source=Join-Path $work 'ShutDown.exe'}\n"
-            L"Copy-Item $source $current -Force;Start-Process $current\n";
+            L"New-Item -ItemType Directory -Path $work -Force | Out-Null\n"
+            L"$source=$downloaded\n"
+            L"if([IO.Path]::GetExtension($downloaded)-ieq '.zip'){\n"
+            L"  if(Get-Command Expand-Archive -ErrorAction SilentlyContinue){Expand-Archive -LiteralPath $downloaded -DestinationPath $work -Force}\n"
+            L"  else{\n"
+            L"    $shell=New-Object -ComObject Shell.Application\n"
+            L"    $zip=$shell.NameSpace($downloaded);$dest=$shell.NameSpace($work)\n"
+            L"    if($zip -eq $null -or $dest -eq $null){throw 'Cannot open update zip'}\n"
+            L"    $dest.CopyHere($zip.Items(), 0x14)\n"
+            L"    for($i=0;$i -lt 100 -and -not (Test-Path -LiteralPath (Join-Path $work 'ShutDown.exe'));$i++){Start-Sleep -Milliseconds 200}\n"
+            L"  }\n"
+            L"  $source=Join-Path $work 'ShutDown.exe'\n"
+            L"}\n"
+            L"if(-not (Test-Path -LiteralPath $source)){throw \"Update source not found: $source\"}\n"
+            L"Copy-Item -LiteralPath $source -Destination $current -Force\n"
+            L"Write-Log 'copy complete, restarting'\n"
+            L"Start-Process -FilePath $current -WorkingDirectory (Split-Path -Parent $current)\n"
+            L"}catch{Write-Log ('install failed: '+$_.Exception.Message);exit 1}\n";
     file.close();
     wchar_t modulePath[MAX_PATH]{};
     GetModuleFileNameW(nullptr, modulePath, MAX_PATH);

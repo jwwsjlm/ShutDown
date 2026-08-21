@@ -2,7 +2,6 @@ name: Windows CI
 
 on:
   push:
-    branches: ["main", "master"]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
@@ -57,8 +56,10 @@ jobs:
         run: |
           $package = Join-Path $pwd "package"
           New-Item -ItemType Directory -Path $package -Force | Out-Null
-          Copy-Item (Join-Path $pwd "build/Release/ShutDown.exe") (Join-Path $package "ShutDown.exe") -Force
+          $exe = Join-Path $pwd "build/Release/ShutDown.exe"
+          Copy-Item $exe (Join-Path $package "ShutDown.exe") -Force
           Copy-Item (Join-Path $pwd "third_party/win32xx/license.txt") (Join-Path $package "Win32xx-MIT.txt") -Force
+          Copy-Item $exe (Join-Path $pwd "ShutDown-windows-${{ matrix.arch }}.exe") -Force
           $archive = Join-Path $pwd "ShutDown-windows-${{ matrix.arch }}.zip"
           Compress-Archive -Path (Join-Path $package '*') -DestinationPath $archive -Force
 
@@ -68,6 +69,7 @@ jobs:
           name: ShutDown-windows-${{ matrix.arch }}
           path: |
             package/
+            ShutDown-windows-${{ matrix.arch }}.exe
             ShutDown-windows-${{ matrix.arch }}.zip
           if-no-files-found: error
 
@@ -103,5 +105,7 @@ jobs:
           generate_release_notes: false
           body_path: release-notes/${{ github.ref_name }}.md
           files: |
+            release/ShutDown-windows-x64.exe
+            release/ShutDown-windows-x86.exe
             release/ShutDown-windows-x64.zip
             release/ShutDown-windows-x86.zip

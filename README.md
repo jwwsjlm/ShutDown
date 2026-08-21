@@ -49,7 +49,7 @@ PowerShell -ExecutionPolicy Bypass -File D:\code\ShutDown\scripts\build.ps1 -Tes
 - 对 `v*` 标签自动创建 GitHub Release 并上传两个架构的 ZIP
 
 发布新版本时，请同步修改 `D:\code\ShutDown\CMakeLists.txt` 中的 `project(... VERSION ...)`，
-然后创建同名标签，例如版本 `1.0.8` 使用标签 `v1.0.8`。Release 需要同时提供
+然后创建同名标签，例如版本 `1.0.9` 使用标签 `v1.0.9`。Release 需要同时提供
 `ShutDown-windows-x64.zip` 和 `ShutDown-windows-x86.zip`，程序会根据自身架构选择资产，
 并在确认 SHA-256（如果 GitHub 提供 digest）后下载和安装。
 

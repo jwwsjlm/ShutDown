@@ -75,6 +75,10 @@ jobs:
           New-Item -ItemType Directory -Path $package -Force | Out-Null
           $exe = Join-Path $pwd "build/Release/ShutDown.exe"
           if (-not (Test-Path $exe)) { throw "Executable not found: $exe" }
+          # windeployqt copies runtime dependencies but does not copy the
+          # application binary itself when --dir is used.  Copy it explicitly
+          # so the ZIP is runnable after extraction.
+          Copy-Item -LiteralPath $exe -Destination (Join-Path $package "ShutDown.exe") -Force
           & "$env:QT_ROOT_DIR/bin/windeployqt.exe" `
             --release `
             --no-translations `

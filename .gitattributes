@@ -1,0 +1,16 @@
+# Keep repository text files stable on Windows and avoid CRLF conversion warnings.
+* text=auto eol=lf
+
+# Binary files must never be line-ending converted.
+*.ico binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.zip binary
+*.7z binary
+*.exe binary
+*.dll binary
+*.pdb binary
+*.lib binary
+*.obj binary

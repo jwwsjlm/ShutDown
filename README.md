@@ -4,10 +4,8 @@
 
 ## 下载
 
-推荐安装版。程序内可以手动检查新版本，确认后会打开 GitHub 下载页面：
+程序内可以手动检查新版本，确认后会打开 GitHub 下载页面。发布包只提供便携版：
 
-- [Windows x64 安装版](https://github.com/jwwsjlm/ShutDown/releases/latest/download/ShutDown-win-x64-Setup.exe)
-- [Windows x86 安装版](https://github.com/jwwsjlm/ShutDown/releases/latest/download/ShutDown-win-x86-Setup.exe)
 - [Windows x64 便携版](https://github.com/jwwsjlm/ShutDown/releases/latest/download/ShutDown-win-x64-Portable.zip)
 - [Windows x86 便携版](https://github.com/jwwsjlm/ShutDown/releases/latest/download/ShutDown-win-x86-Portable.zip)
 

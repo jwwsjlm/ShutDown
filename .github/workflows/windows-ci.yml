@@ -112,15 +112,12 @@ jobs:
           $body = $body.Replace('vX.Y.Z', $tag).Replace('<version>', $version)
           Set-Content -LiteralPath (Join-Path $pwd "release/generated-notes.md") -Value $body -NoNewline -Encoding UTF8
 
-      - name: Build Velopack packages
+      - name: Build portable packages
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}" -replace '^v', ''
-          $notes = Join-Path $pwd "release/generated-notes.md"
-          $out = Join-Path $pwd "release/velopack"
-          dotnet tool install --tool-path .vpk vpk --version 1.2.0
-          .\.vpk\vpk pack --packId ShutDown --packVersion $version --packDir release/app-x64 --mainExe ShutDown.exe --runtime win-x64 --channel win-x64 --outputDir $out --releaseNotes $notes --icon resources/app.ico --packTitle ShutDown --packAuthors ShutDown --yes --skip-updates
-          .\.vpk\vpk pack --packId ShutDown --packVersion $version --packDir release/app-x86 --mainExe ShutDown.exe --runtime win-x86 --channel win-x86 --outputDir $out --releaseNotes $notes --icon resources/app.ico --packTitle ShutDown --packAuthors ShutDown --yes --skip-updates
+          $out = Join-Path $pwd "release"
+          Compress-Archive -Path (Join-Path $pwd "release/app-x64/*") -DestinationPath (Join-Path $out "ShutDown-win-x64-Portable.zip") -Force
+          Compress-Archive -Path (Join-Path $pwd "release/app-x86/*") -DestinationPath (Join-Path $out "ShutDown-win-x86-Portable.zip") -Force
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3.0.2
@@ -128,7 +125,5 @@ jobs:
           generate_release_notes: false
           body_path: release/generated-notes.md
           files: |
-            release/velopack/ShutDown-win-x64-Setup.exe
-            release/velopack/ShutDown-win-x86-Setup.exe
-            release/velopack/ShutDown-win-x64-Portable.zip
-            release/velopack/ShutDown-win-x86-Portable.zip
+            release/ShutDown-win-x64-Portable.zip
+            release/ShutDown-win-x86-Portable.zip

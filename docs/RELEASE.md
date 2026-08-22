@@ -25,9 +25,7 @@ workflow 只在 `v*` tag 上发布，普通 push 到 `main` 不触发构建。
 
 ## 发布资产
 
-Release 只上传用户直接使用的安装包和便携包：
+Release 只上传用户直接使用的便携包：
 
-- `ShutDown-win-x64-Setup.exe`
-- `ShutDown-win-x86-Setup.exe`
 - `ShutDown-win-x64-Portable.zip`
 - `ShutDown-win-x86-Portable.zip`

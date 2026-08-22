@@ -10,11 +10,9 @@
 #include <uxtheme.h>
 #include <windows.h>
 
-#include <algorithm>
 #include <chrono>
 #include <ctime>
 #include <memory>
-#include <sstream>
 
 #ifdef _MSC_VER
 #pragma comment(lib, "comctl32.lib")
@@ -25,13 +23,15 @@
 namespace {
 enum : int {
     IDC_DATE = 1001, IDC_TIME, IDC_HOURS, IDC_MINUTES, IDC_SECONDS, IDC_FORCE, IDC_FALLBACK,
-    IDC_AT, IDC_COUNTDOWN, IDC_PAUSE, IDC_CANCEL, IDC_NOW, IDC_CHECK, IDC_PROGRESS, IDC_TAB,
+    IDC_AT, IDC_COUNTDOWN, IDC_PAUSE, IDC_CANCEL, IDC_NOW, IDC_CHECK, IDC_GITHUB, IDC_TAB,
     IDC_STATUS, IDC_REMAINING, ID_TRAY_SHOW = 2001, ID_TRAY_CANCEL, ID_TRAY_CHECK,
     ID_TRAY_NOW, ID_TRAY_EXIT
 };
 constexpr UINT WM_TRAY = WM_APP + 10;
 constexpr UINT WM_UI_EVENT = WM_APP + 11;
 constexpr UINT TIMER_SCHEDULER = 1;
+constexpr wchar_t kProjectUrl[] = L"https://github.com/jwwsjlm/ShutDown";
+constexpr wchar_t kLatestReleaseUrl[] = L"https://github.com/jwwsjlm/ShutDown/releases/latest";
 
 HWND control(DWORD exStyle, LPCWSTR cls, LPCWSTR title, DWORD style, int x, int y, int w, int h, HWND parent, int id) {
     return CreateWindowExW(exStyle, cls, title, style, x, y, w, h, parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), GetModuleHandleW(nullptr), nullptr);
@@ -60,20 +60,15 @@ std::wstring utf8ToWide(const std::string &value) {
     return result;
 }
 
-std::wstring updatePromptText(const UpdateInfo &info) {
-    std::wstring message = L"发现新版本 " + utf8ToWide(info.version) + L"。";
-    if (!info.notes.empty()) {
-        std::wstring notes = utf8ToWide(info.notes);
-        notes.erase(std::remove(notes.begin(), notes.end(), L'\r'), notes.end());
-        constexpr size_t kMaxNotesChars = 1800;
-        if (notes.size() > kMaxNotesChars) {
-            notes.resize(kMaxNotesChars);
-            notes += L"\n...";
-        }
-        message += L"\n\n更新内容：\n" + notes;
+std::wstring updatePromptText(const std::string &version) {
+    return L"发现新版本 v" + utf8ToWide(version) + L"。\n\n是否打开 GitHub 下载页面？";
+}
+
+void openUrl(HWND owner, const wchar_t *url) {
+    const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(owner, L"open", url, nullptr, nullptr, SW_SHOWNORMAL));
+    if (result <= 32) {
+        ::MessageBoxW(owner, L"无法打开浏览器，请稍后重试。", L"打开链接失败", MB_OK | MB_ICONWARNING);
     }
-    message += L"\n\n是否立即下载？";
-    return message;
 }
 
 std::time_t pickerDateTime(HWND datePicker, HWND timePicker) {
@@ -117,12 +112,9 @@ MainWindow::MainWindow(std::string version)
     m_scheduler.setRemainingCallback([this](std::int64_t seconds) { updateRemaining(seconds); });
     m_scheduler.setErrorCallback([this](const std::wstring &message) { ::MessageBoxW(GetHwnd(), message.c_str(), L"关机失败", MB_ICONERROR); });
     UpdateManager::Callbacks callbacks;
-    callbacks.updateAvailable = [this](const UpdateInfo &info) { auto *event = new UiEvent{}; event->type = UiEvent::Type::UpdateAvailable; event->info = info; post(event); };
+    callbacks.updateAvailable = [this](const std::string &version) { auto *event = new UiEvent{}; event->type = UiEvent::Type::UpdateAvailable; event->version = version; post(event); };
     callbacks.noUpdateAvailable = [this] { auto *event = new UiEvent{}; event->type = UiEvent::Type::NoUpdate; post(event); };
     callbacks.checkError = [this](const std::wstring &text) { auto *event = new UiEvent{}; event->type = UiEvent::Type::CheckError; event->text = text; post(event); };
-    callbacks.downloadProgress = [this](std::int64_t r, std::int64_t t) { auto *event = new UiEvent{}; event->type = UiEvent::Type::DownloadProgress; event->received = r; event->total = t; post(event); };
-    callbacks.downloadFinished = [this](const std::wstring &path) { auto *event = new UiEvent{}; event->type = UiEvent::Type::DownloadFinished; event->text = path; post(event); };
-    callbacks.downloadError = [this](const std::wstring &text) { auto *event = new UiEvent{}; event->type = UiEvent::Type::DownloadError; event->text = text; post(event); };
     m_updateManager.setCallbacks(std::move(callbacks));
 }
 
@@ -203,12 +195,12 @@ void MainWindow::createControls() {
     m_force = control(0, L"BUTTON", L"强制关闭应用（可能丢失未保存数据）", WS_CHILD | WS_TABSTOP | BS_AUTOCHECKBOX, 44, 72, 430, 24, GetHwnd(), IDC_FORCE);
     m_fallback = control(0, L"BUTTON", L"启用 Task Scheduler 系统兜底", WS_CHILD | WS_TABSTOP | BS_AUTOCHECKBOX, 44, 104, 400, 24, GetHwnd(), IDC_FALLBACK);
     m_checkUpdate = control(0, L"BUTTON", L"检查更新", WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON, 44, 148, 118, 30, GetHwnd(), IDC_CHECK);
-    m_progress = control(0, PROGRESS_CLASSW, L"", WS_CHILD, 180, 154, 310, 20, GetHwnd(), IDC_PROGRESS);
-    SendMessageW(m_progress, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
+    auto *projectLabel = control(0, L"STATIC", L"项目主页:", WS_CHILD | SS_CENTERIMAGE, 44, 194, 74, 24, GetHwnd(), 0);
+    m_githubLink = control(0, WC_LINK, L"<a href=\"https://github.com/jwwsjlm/ShutDown\">GitHub 项目主页</a>", WS_CHILD | WS_TABSTOP, 118, 194, 240, 24, GetHwnd(), IDC_GITHUB);
     m_mainControls = {groupAt, labelAt, m_dateEdit, m_timeEdit, atButton, groupCount, countLabel, m_hours, m_minutes, m_seconds,
                       hoursLabel, minutesLabel, secondsLabel, countButton, groupStatus, statusLabel, m_status, remainingLabel,
                       m_remaining, m_pause, cancelButton, nowButton};
-    m_settingsControls = {m_settingsGroup, m_force, m_fallback, m_checkUpdate, m_progress};
+    m_settingsControls = {m_settingsGroup, m_force, m_fallback, m_checkUpdate, projectLabel, m_githubLink};
     for (HWND child : m_mainControls) setFont(child, m_font);
     for (HWND child : m_settingsControls) setFont(child, m_font);
     setFont(m_tab, m_font);
@@ -281,8 +273,8 @@ void MainWindow::executeNow() {
     m_scheduler.cancel(); std::wstring error; if (!ShutdownExecutor::execute(isChecked(m_force), &error)) ::MessageBoxW(GetHwnd(), error.c_str(), L"关机失败", MB_OK | MB_ICONERROR);
 }
 
-void MainWindow::checkForUpdates(bool silent) {
-    m_silentUpdateCheck = silent; ::EnableWindow(m_checkUpdate, FALSE); setText(m_checkUpdate, L"检查中..."); m_updateManager.checkForUpdates();
+void MainWindow::checkForUpdates() {
+    ::EnableWindow(m_checkUpdate, FALSE); setText(m_checkUpdate, L"检查中..."); m_updateManager.checkForUpdates();
 }
 
 std::wstring MainWindow::formatDuration(std::int64_t seconds) {
@@ -319,17 +311,11 @@ void MainWindow::post(UiEvent *event) { if (!PostMessageW(GetHwnd(), WM_UI_EVENT
 void MainWindow::handleEvent(std::unique_ptr<UiEvent> event) {
     switch (event->type) {
     case UiEvent::Type::UpdateAvailable:
-        m_availableUpdate = event->info; ::EnableWindow(m_checkUpdate, TRUE); setText(m_checkUpdate, L"检查更新"); m_silentUpdateCheck = false;
-        if (::MessageBoxW(GetHwnd(), updatePromptText(event->info).c_str(), L"发现新版本", MB_YESNO | MB_ICONINFORMATION) == IDYES) { SendMessageW(m_progress, PBM_SETPOS, 0, 0); m_updateManager.downloadUpdate(event->info); }
+        ::EnableWindow(m_checkUpdate, TRUE); setText(m_checkUpdate, L"检查更新");
+        if (::MessageBoxW(GetHwnd(), updatePromptText(event->version).c_str(), L"发现新版本", MB_YESNO | MB_ICONINFORMATION) == IDYES) openUrl(GetHwnd(), kLatestReleaseUrl);
         break;
-    case UiEvent::Type::NoUpdate: ::EnableWindow(m_checkUpdate, TRUE); setText(m_checkUpdate, L"检查更新"); if (!m_silentUpdateCheck) ::MessageBoxW(GetHwnd(), L"当前已经是最新版本。", L"检查更新", MB_OK | MB_ICONINFORMATION); m_silentUpdateCheck = false; break;
-    case UiEvent::Type::CheckError: ::EnableWindow(m_checkUpdate, TRUE); setText(m_checkUpdate, L"检查更新"); if (!m_silentUpdateCheck) ::MessageBoxW(GetHwnd(), event->text.c_str(), L"检查更新失败", MB_OK | MB_ICONWARNING); m_silentUpdateCheck = false; break;
-    case UiEvent::Type::DownloadProgress: if (event->total > 0) SendMessageW(m_progress, PBM_SETPOS, static_cast<WPARAM>(event->received * 100 / event->total), 0); break;
-    case UiEvent::Type::DownloadFinished:
-        SendMessageW(m_progress, PBM_SETPOS, 100, 0);
-        if (::MessageBoxW(GetHwnd(), L"更新包已下载，立即重启安装？", L"安装更新", MB_YESNO | MB_ICONQUESTION) == IDYES) { std::wstring error; if (!m_updateManager.installAndRestart(event->text, &error)) ::MessageBoxW(GetHwnd(), error.c_str(), L"安装更新失败", MB_OK | MB_ICONERROR); else { m_forceQuit = true; DestroyWindow(GetHwnd()); } }
-        break;
-    case UiEvent::Type::DownloadError: SendMessageW(m_progress, PBM_SETPOS, 0, 0); ::MessageBoxW(GetHwnd(), event->text.c_str(), L"下载更新失败", MB_OK | MB_ICONWARNING); break;
+    case UiEvent::Type::NoUpdate: ::EnableWindow(m_checkUpdate, TRUE); setText(m_checkUpdate, L"检查更新"); ::MessageBoxW(GetHwnd(), L"当前已经是最新版本。", L"检查更新", MB_OK | MB_ICONINFORMATION); break;
+    case UiEvent::Type::CheckError: ::EnableWindow(m_checkUpdate, TRUE); setText(m_checkUpdate, L"检查更新"); ::MessageBoxW(GetHwnd(), event->text.c_str(), L"检查更新失败", MB_OK | MB_ICONWARNING); break;
     }
 }
 
@@ -342,6 +328,11 @@ LRESULT MainWindow::OnNotify(WPARAM wparam, LPARAM lparam) {
     auto *notify = reinterpret_cast<NMHDR *>(lparam);
     if (notify && (notify->hwndFrom == m_tab || static_cast<int>(notify->idFrom) == IDC_TAB)) {
         setSettingsVisible(TabCtrl_GetCurSel(m_tab) == 1);
+        return TRUE;
+    }
+    if (notify && static_cast<int>(notify->idFrom) == IDC_GITHUB &&
+        (notify->code == NM_CLICK || notify->code == NM_RETURN)) {
+        openUrl(GetHwnd(), kProjectUrl);
         return TRUE;
     }
     return CWnd::OnNotify(wparam, lparam);

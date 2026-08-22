@@ -1,196 +1,181 @@
 #include "UpdateManager.h"
 
 #include <windows.h>
+#include <winhttp.h>
 
 #include <array>
-#include <exception>
-#include <memory>
 #include <sstream>
-#include <utility>
 
 namespace {
 
-std::wstring utf8ToWide(const std::string &value) {
-    if (value.empty()) return {};
-    const int size = MultiByteToWideChar(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0);
-    std::wstring result(size, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), result.data(), size);
-    return result;
+constexpr wchar_t kGitHubHost[] = L"api.github.com";
+constexpr wchar_t kLatestReleasePath[] = L"/repos/jwwsjlm/ShutDown/releases/latest";
+
+class InternetHandle {
+public:
+    explicit InternetHandle(HINTERNET handle = nullptr) : m_handle(handle) {}
+    ~InternetHandle() { if (m_handle) WinHttpCloseHandle(m_handle); }
+    InternetHandle(const InternetHandle &) = delete;
+    InternetHandle &operator=(const InternetHandle &) = delete;
+    HINTERNET get() const { return m_handle; }
+
+private:
+    HINTERNET m_handle;
+};
+
+std::wstring requestError(const wchar_t *action) {
+    return std::wstring(action) + L"（错误码 " + std::to_wstring(GetLastError()) + L"）";
 }
 
-#ifdef SHUTDOWN_USE_VELOPACK
-std::unique_ptr<Velopack::UpdateManager> createVelopackManager() {
-    auto source = std::make_unique<Velopack::GithubSource>("https://github.com/jwwsjlm/ShutDown");
-    return std::make_unique<Velopack::UpdateManager>(std::move(source));
+bool parseVersion(const std::string &value, std::array<int, 3> &parts) {
+    const std::string normalized = UpdateManager::normalizeVersion(value);
+    std::istringstream stream(normalized);
+    char firstDot = 0;
+    char secondDot = 0;
+    if (!(stream >> parts[0] >> firstDot >> parts[1] >> secondDot >> parts[2])) return false;
+    stream >> std::ws;
+    return firstDot == '.' && secondDot == '.' && stream.eof() &&
+           parts[0] >= 0 && parts[1] >= 0 && parts[2] >= 0;
 }
 
-UpdateInfo toNativeUpdateInfo(const Velopack::UpdateInfo &update) {
-    UpdateInfo info;
-    info.version = UpdateManager::normalizeVersion(update.TargetFullRelease.Version);
-    info.tagName = "v" + info.version;
-    info.title = "Velopack Release";
-    info.notes = update.TargetFullRelease.NotesMarkdown;
-    info.assetName = update.TargetFullRelease.FileName;
-    info.downloadUrl = "velopack://github/jwwsjlm/ShutDown/" + update.TargetFullRelease.FileName;
-    return info;
-}
+bool readJsonString(const std::string &json, const std::string &name, std::string &value) {
+    const std::string key = "\"" + name + "\"";
+    auto position = json.find(key);
+    if (position == std::string::npos) return false;
+    position = json.find(':', position + key.size());
+    if (position == std::string::npos) return false;
+    position = json.find('"', position + 1);
+    if (position == std::string::npos) return false;
 
-void velopackProgress(void *userData, size_t progress) {
-    auto *callbacks = reinterpret_cast<UpdateManager::Callbacks *>(userData);
-    if (callbacks && callbacks->downloadProgress) {
-        callbacks->downloadProgress(static_cast<std::int64_t>(progress), 100);
+    value.clear();
+    for (++position; position < json.size(); ++position) {
+        const char current = json[position];
+        if (current == '"') return true;
+        if (current == '\\' && position + 1 < json.size()) {
+            value.push_back(json[++position]);
+        } else {
+            value.push_back(current);
+        }
     }
+    return false;
 }
-#endif
+
+bool fetchLatestVersion(std::string &version, std::wstring &error) {
+    InternetHandle session(WinHttpOpen(L"ShutDown update checker",
+                                       WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                       WINHTTP_NO_PROXY_NAME,
+                                       WINHTTP_NO_PROXY_BYPASS,
+                                       0));
+    if (!session.get()) {
+        error = requestError(L"无法初始化网络请求");
+        return false;
+    }
+    WinHttpSetTimeouts(session.get(), 5000, 5000, 10000, 10000);
+
+    InternetHandle connection(WinHttpConnect(session.get(), kGitHubHost, INTERNET_DEFAULT_HTTPS_PORT, 0));
+    if (!connection.get()) {
+        error = requestError(L"无法连接 GitHub");
+        return false;
+    }
+
+    InternetHandle request(WinHttpOpenRequest(connection.get(), L"GET", kLatestReleasePath,
+                                               nullptr, WINHTTP_NO_REFERER,
+                                               WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                               WINHTTP_FLAG_SECURE));
+    if (!request.get()) {
+        error = requestError(L"无法创建更新请求");
+        return false;
+    }
+
+    constexpr wchar_t headers[] =
+        L"Accept: application/vnd.github+json\r\n"
+        L"X-GitHub-Api-Version: 2022-11-28\r\n";
+    if (!WinHttpSendRequest(request.get(), headers, static_cast<DWORD>(-1L),
+                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+        !WinHttpReceiveResponse(request.get(), nullptr)) {
+        error = requestError(L"GitHub 更新检查失败");
+        return false;
+    }
+
+    DWORD status = 0;
+    DWORD statusSize = sizeof(status);
+    if (!WinHttpQueryHeaders(request.get(), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                             WINHTTP_HEADER_NAME_BY_INDEX, &status, &statusSize,
+                             WINHTTP_NO_HEADER_INDEX)) {
+        error = requestError(L"无法读取 GitHub 响应");
+        return false;
+    }
+    if (status != 200) {
+        error = L"GitHub 更新检查失败（HTTP " + std::to_wstring(status) + L"）";
+        return false;
+    }
+
+    std::string body;
+    std::array<char, 4096> buffer{};
+    for (;;) {
+        DWORD bytesRead = 0;
+        if (!WinHttpReadData(request.get(), buffer.data(), static_cast<DWORD>(buffer.size()), &bytesRead)) {
+            error = requestError(L"无法读取 GitHub 响应");
+            return false;
+        }
+        if (bytesRead == 0) break;
+        body.append(buffer.data(), bytesRead);
+        if (body.size() > 1024 * 1024) {
+            error = L"GitHub 返回的版本信息过大";
+            return false;
+        }
+    }
+
+    if (!readJsonString(body, "tag_name", version)) {
+        error = L"GitHub 返回的版本信息无效";
+        return false;
+    }
+    version = UpdateManager::normalizeVersion(version);
+    std::array<int, 3> parsed{};
+    if (!parseVersion(version, parsed)) {
+        error = L"GitHub Release 版本号格式无效";
+        return false;
+    }
+    return true;
+}
 
 } // namespace
 
 UpdateManager::UpdateManager(std::string currentVersion) : m_currentVersion(std::move(currentVersion)) {}
-UpdateManager::~UpdateManager() { cancelDownload(); joinWorker(); }
+UpdateManager::~UpdateManager() { joinWorker(); }
 
 void UpdateManager::joinWorker() {
     if (m_worker.joinable()) m_worker.join();
 }
 
-std::string UpdateManager::currentArchitectureToken() {
-#ifdef _WIN64
-    return "x64";
-#else
-    return "x86";
-#endif
-}
-
 std::string UpdateManager::normalizeVersion(const std::string &value) {
     std::string result = value;
     while (!result.empty() && (result[0] == 'v' || result[0] == 'V')) result.erase(result.begin());
-    const auto pos = result.find_first_of("-+");
-    if (pos != std::string::npos) result.resize(pos);
+    const auto position = result.find_first_of("-+");
+    if (position != std::string::npos) result.resize(position);
     return result;
 }
 
-bool UpdateManager::isNewerThanCurrent(const std::string &version) const {
-    auto parse = [](const std::string &s) {
-        std::array<int, 3> out{};
-        std::stringstream ss(s);
-        char dot;
-        ss >> out[0] >> dot >> out[1] >> dot >> out[2];
-        return out;
-    };
-    return parse(normalizeVersion(version)) > parse(normalizeVersion(m_currentVersion));
+bool UpdateManager::isNewerVersion(const std::string &candidate, const std::string &current) {
+    std::array<int, 3> candidateParts{};
+    std::array<int, 3> currentParts{};
+    return parseVersion(candidate, candidateParts) && parseVersion(current, currentParts) &&
+           candidateParts > currentParts;
 }
 
 void UpdateManager::checkForUpdates() {
     joinWorker();
-    m_cancel = false;
-    if (m_callbacks.checkingStarted) m_callbacks.checkingStarted();
     m_worker = std::thread([this] {
-#ifdef SHUTDOWN_USE_VELOPACK
-        try {
-            auto manager = createVelopackManager();
-            if (manager->IsPortable()) {
-                if (m_callbacks.checkingFinished) m_callbacks.checkingFinished();
-                if (m_callbacks.checkError) {
-                    m_callbacks.checkError(L"当前是便携版或未通过 Velopack 安装，自动更新仅支持 Setup.exe 安装版。请从 GitHub Release 下载最新版安装包。");
-                }
-                return;
-            }
-
-            const auto update = manager->CheckForUpdates();
-            if (m_callbacks.checkingFinished) m_callbacks.checkingFinished();
-            if (update.has_value()) {
-                {
-                    std::lock_guard<std::mutex> lock(m_velopackMutex);
-                    m_velopackAvailable = update;
-                    m_velopackDownloaded.reset();
-                }
-                if (m_callbacks.updateAvailable) m_callbacks.updateAvailable(toNativeUpdateInfo(update.value()));
-            } else if (m_callbacks.noUpdateAvailable) {
-                m_callbacks.noUpdateAvailable();
-            }
-        } catch (const std::exception &ex) {
-            if (m_callbacks.checkingFinished) m_callbacks.checkingFinished();
-            if (m_callbacks.checkError) m_callbacks.checkError(utf8ToWide(ex.what()));
-        } catch (...) {
-            if (m_callbacks.checkingFinished) m_callbacks.checkingFinished();
-            if (m_callbacks.checkError) m_callbacks.checkError(L"Velopack 检查更新失败");
-        }
-#else
-        if (m_callbacks.checkingFinished) m_callbacks.checkingFinished();
-        if (m_callbacks.checkError) {
-            m_callbacks.checkError(L"当前构建未启用 Velopack，无法自动更新。请使用 GitHub Release 中的 Setup.exe 安装版。");
-        }
-#endif
-    });
-}
-
-void UpdateManager::downloadUpdate(const UpdateInfo &info) {
-    joinWorker();
-    m_cancel = false;
-    m_worker = std::thread([this, info] {
-#ifdef SHUTDOWN_USE_VELOPACK
-        std::optional<Velopack::UpdateInfo> velopackUpdate;
-        {
-            std::lock_guard<std::mutex> lock(m_velopackMutex);
-            velopackUpdate = m_velopackAvailable;
-        }
-        if (!velopackUpdate.has_value() || info.downloadUrl.rfind("velopack://", 0) != 0) {
-            if (m_callbacks.downloadError) m_callbacks.downloadError(L"无效的 Velopack 更新信息");
+        std::string latestVersion;
+        std::wstring error;
+        if (!fetchLatestVersion(latestVersion, error)) {
+            if (m_callbacks.checkError) m_callbacks.checkError(error);
             return;
         }
-
-        try {
-            auto manager = createVelopackManager();
-            Callbacks callbacks = m_callbacks;
-            manager->DownloadUpdates(velopackUpdate.value(), velopackProgress, &callbacks);
-            {
-                std::lock_guard<std::mutex> lock(m_velopackMutex);
-                m_velopackDownloaded = velopackUpdate;
-            }
-            if (m_callbacks.downloadFinished) m_callbacks.downloadFinished(L"velopack");
-        } catch (const std::exception &ex) {
-            if (m_callbacks.downloadError) m_callbacks.downloadError(utf8ToWide(ex.what()));
-        } catch (...) {
-            if (m_callbacks.downloadError) m_callbacks.downloadError(L"Velopack 下载更新失败");
+        if (isNewerVersion(latestVersion, m_currentVersion)) {
+            if (m_callbacks.updateAvailable) m_callbacks.updateAvailable(latestVersion);
+        } else if (m_callbacks.noUpdateAvailable) {
+            m_callbacks.noUpdateAvailable();
         }
-#else
-        (void)info;
-        if (m_callbacks.downloadError) m_callbacks.downloadError(L"当前构建未启用 Velopack，无法下载更新");
-#endif
     });
-}
-
-void UpdateManager::cancelDownload() { m_cancel = true; }
-
-bool UpdateManager::installAndRestart(const std::wstring &downloadedFile, std::wstring *errorMessage) const {
-#ifdef SHUTDOWN_USE_VELOPACK
-    if (downloadedFile != L"velopack") {
-        if (errorMessage) *errorMessage = L"无效的 Velopack 更新状态";
-        return false;
-    }
-
-    try {
-        std::optional<Velopack::UpdateInfo> update;
-        {
-            std::lock_guard<std::mutex> lock(m_velopackMutex);
-            update = m_velopackDownloaded.has_value() ? m_velopackDownloaded : m_velopackAvailable;
-        }
-        if (!update.has_value()) {
-            if (errorMessage) *errorMessage = L"没有可安装的 Velopack 更新";
-            return false;
-        }
-        auto manager = createVelopackManager();
-        manager->WaitExitThenApplyUpdates(update.value(), false, true);
-        return true;
-    } catch (const std::exception &ex) {
-        if (errorMessage) *errorMessage = utf8ToWide(ex.what());
-        return false;
-    } catch (...) {
-        if (errorMessage) *errorMessage = L"Velopack 启动更新器失败";
-        return false;
-    }
-#else
-    (void)downloadedFile;
-    if (errorMessage) *errorMessage = L"当前构建未启用 Velopack，无法安装更新";
-    return false;
-#endif
 }

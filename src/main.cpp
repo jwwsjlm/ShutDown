@@ -3,14 +3,6 @@
 
 #include <windows.h>
 #include <commctrl.h>
-#include <shellapi.h>
-
-#include <filesystem>
-#include <string>
-
-#ifdef SHUTDOWN_USE_VELOPACK
-#include "Velopack.hpp"
-#endif
 
 #ifndef SHUTDOWN_VERSION
 #define SHUTDOWN_VERSION "0.0.0-dev"
@@ -19,15 +11,8 @@
 class ShutdownApp final : public Win32xx::CWinApp {};
 
 int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
-#ifdef SHUTDOWN_USE_VELOPACK
-    try {
-        Velopack::VelopackApp::Build().Run();
-    } catch (...) {
-        // Velopack startup hooks should never block the normal app.
-    }
-#endif
     ShutdownApp app;
-    INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_STANDARD_CLASSES | ICC_PROGRESS_CLASS | ICC_TAB_CLASSES};
+    INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_STANDARD_CLASSES | ICC_TAB_CLASSES | ICC_LINK_CLASS};
     InitCommonControlsEx(&controls);
     AppLogger::initialize();
     const auto mutex = CreateMutexW(nullptr, TRUE, L"Local\\ShutDown.SingleInstance");

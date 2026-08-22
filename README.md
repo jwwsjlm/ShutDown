@@ -4,7 +4,7 @@
 
 ## 下载
 
-推荐安装版，后续可以自动更新：
+推荐安装版。程序内可以手动检查新版本，确认后会打开 GitHub 下载页面：
 
 - [Windows x64 安装版](https://github.com/jwwsjlm/ShutDown/releases/latest/download/ShutDown-win-x64-Setup.exe)
 - [Windows x86 安装版](https://github.com/jwwsjlm/ShutDown/releases/latest/download/ShutDown-win-x86-Setup.exe)
@@ -21,7 +21,7 @@
 - 最小化隐藏到系统托盘，托盘菜单显示倒计时
 - `ExitWindowsEx` → `InitiateSystemShutdownEx` → `shutdown.exe` 三级执行
 - 可选 `schtasks.exe` 一次性系统任务兜底
-- Velopack 安装版自动更新
+- 手动检查 GitHub Release 更新
 
 ## 快速构建
 

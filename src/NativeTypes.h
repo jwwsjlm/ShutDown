@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <string>
 
 struct PersistedTask {
     enum class Type { None, ScheduledAt, Countdown };
@@ -11,14 +10,4 @@ struct PersistedTask {
     bool force = false;
     bool taskSchedulerFallback = false;
     bool paused = false;
-};
-
-struct UpdateInfo {
-    std::string version;
-    std::string tagName;
-    std::string title;
-    std::string notes;
-    std::string assetName;
-    std::string downloadUrl;
-    bool isValid() const { return !version.empty() && !downloadUrl.empty(); }
 };

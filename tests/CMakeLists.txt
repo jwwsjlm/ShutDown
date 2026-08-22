@@ -14,5 +14,5 @@ add_executable(ShutDownUpdateTests
     ../src/UpdateManager.cpp
 )
 target_include_directories(ShutDownUpdateTests PRIVATE ../src)
-target_link_libraries(ShutDownUpdateTests PRIVATE user32)
+target_link_libraries(ShutDownUpdateTests PRIVATE winhttp)
 add_test(NAME ShutDownUpdateTests COMMAND ShutDownUpdateTests)

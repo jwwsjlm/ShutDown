@@ -5,7 +5,6 @@ endif()
 
 set(SHUTDOWN_BASE_VERSION 2.1.4)
 set(SHUTDOWN_VERSION_OVERRIDE "" CACHE STRING "Override version, normally passed by release CI from the git tag.")
-set(VELOPACK_ROOT "" CACHE PATH "Path to extracted velopack_libc package.")
 
 set(SHUTDOWN_EFFECTIVE_VERSION "${SHUTDOWN_BASE_VERSION}")
 if (NOT "${SHUTDOWN_VERSION_OVERRIDE}" STREQUAL "")
@@ -22,10 +21,6 @@ message(STATUS "ShutDown version: ${PROJECT_VERSION}")
 
 if (NOT WIN32)
     message(FATAL_ERROR "ShutDown now targets Windows and Win32++ only")
-endif()
-
-if (NOT VELOPACK_ROOT AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tools/velopack/include/Velopack.hpp")
-    set(VELOPACK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/tools/velopack")
 endif()
 
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -62,22 +57,7 @@ set_source_files_properties("${SHUTDOWN_RC_FILE}" PROPERTIES
     OBJECT_DEPENDS "${SHUTDOWN_MANIFEST_FILE};${SHUTDOWN_ICON_FILE};${SHUTDOWN_RC_INCLUDE};${CMAKE_CURRENT_SOURCE_DIR}/resources/app.rc.in"
 )
 target_include_directories(ShutDown PRIVATE src third_party/win32xx/include)
-target_link_libraries(ShutDown PRIVATE win32xx::win32xx comctl32 shell32 advapi32 user32 gdi32 ole32 uxtheme)
-if (MSVC AND VELOPACK_ROOT)
-    if (CMAKE_SIZEOF_VOID_P EQUAL 8)
-        set(VELOPACK_LIB "${VELOPACK_ROOT}/lib-static/velopack_libc_win_x64_msvc.lib")
-    else()
-        set(VELOPACK_LIB "${VELOPACK_ROOT}/lib-static/velopack_libc_win_x86_msvc.lib")
-    endif()
-    if (EXISTS "${VELOPACK_ROOT}/include/Velopack.hpp" AND EXISTS "${VELOPACK_LIB}")
-        message(STATUS "Velopack enabled: ${VELOPACK_ROOT}")
-        target_include_directories(ShutDown PRIVATE "${VELOPACK_ROOT}/include")
-        target_link_libraries(ShutDown PRIVATE "${VELOPACK_LIB}" ws2_32 userenv crypt32 secur32 ncrypt ntdll)
-        target_compile_definitions(ShutDown PRIVATE SHUTDOWN_USE_VELOPACK=1)
-    else()
-        message(WARNING "VELOPACK_ROOT was set but Velopack headers/libs were not found: ${VELOPACK_ROOT}")
-    endif()
-endif()
+target_link_libraries(ShutDown PRIVATE win32xx::win32xx comctl32 shell32 advapi32 user32 gdi32 ole32 uxtheme winhttp)
 target_compile_definitions(ShutDown PRIVATE
     UNICODE
     _UNICODE

@@ -27,12 +27,10 @@ protected:
 
 private:
     struct UiEvent {
-        enum class Type { UpdateAvailable, NoUpdate, CheckError, DownloadProgress, DownloadFinished, DownloadError };
+        enum class Type { UpdateAvailable, NoUpdate, CheckError };
         Type type;
-        UpdateInfo info;
+        std::string version;
         std::wstring text;
-        std::int64_t received = 0;
-        std::int64_t total = 0;
     };
 
     void createControls();
@@ -46,7 +44,7 @@ private:
     void cancelTask();
     void togglePause();
     void executeNow();
-    void checkForUpdates(bool silent = false);
+    void checkForUpdates();
     void handleEvent(std::unique_ptr<UiEvent> event);
     void updateState(ShutdownScheduler::State state);
     void updateRemaining(std::int64_t seconds);
@@ -60,12 +58,10 @@ private:
 
     UpdateManager m_updateManager;
     ShutdownScheduler m_scheduler;
-    UpdateInfo m_availableUpdate;
     std::wstring m_windowTitle;
     HFONT m_font = nullptr;
     NOTIFYICONDATAW m_tray{};
     bool m_trayCreated = false;
-    bool m_silentUpdateCheck = false;
     bool m_forceQuit = false;
     HWND m_dateEdit = nullptr;
     HWND m_timeEdit = nullptr;
@@ -78,7 +74,7 @@ private:
     HWND m_remaining = nullptr;
     HWND m_pause = nullptr;
     HWND m_checkUpdate = nullptr;
-    HWND m_progress = nullptr;
+    HWND m_githubLink = nullptr;
     HWND m_tab = nullptr;
     HWND m_settingsGroup = nullptr;
     std::vector<HWND> m_mainControls;

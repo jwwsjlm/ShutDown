@@ -37,14 +37,6 @@ cmake --build --preset windows-x86-release
 ctest --preset windows-x86-release
 ```
 
-本地 Velopack SDK 验证：
-
-```powershell
-cmake --preset windows-x64-velopack
-cmake --build --preset windows-x64-velopack-release
-ctest --preset windows-x64-velopack-release
-```
-
 ## 使用脚本
 
 ```powershell

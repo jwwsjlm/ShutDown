@@ -27,15 +27,6 @@
       }
     },
     {
-      "name": "windows-x64-velopack",
-      "displayName": "Windows x64 + local Velopack SDK",
-      "inherits": "windows-x64",
-      "binaryDir": "${sourceDir}/build/windows-x64-velopack",
-      "cacheVariables": {
-        "VELOPACK_ROOT": "${sourceDir}/tools/velopack"
-      }
-    },
-    {
       "name": "mingw-local",
       "displayName": "MinGW local build",
       "generator": "MinGW Makefiles",
@@ -58,11 +49,6 @@
       "configuration": "Release"
     },
     {
-      "name": "windows-x64-velopack-release",
-      "configurePreset": "windows-x64-velopack",
-      "configuration": "Release"
-    },
-    {
       "name": "mingw-local-release",
       "configurePreset": "mingw-local"
     }
@@ -79,14 +65,6 @@
     {
       "name": "windows-x86-release",
       "configurePreset": "windows-x86",
-      "configuration": "Release",
-      "output": {
-        "outputOnFailure": true
-      }
-    },
-    {
-      "name": "windows-x64-velopack-release",
-      "configurePreset": "windows-x64-velopack",
       "configuration": "Release",
       "output": {
         "outputOnFailure": true

@@ -39,6 +39,8 @@ ctest --preset windows-x86-release
 
 ## 使用脚本
 
+脚本使用 Visual Studio 2022 对应的 CMake Presets：
+
 ```powershell
 PowerShell -ExecutionPolicy Bypass -File scripts/build.ps1 -Architecture x64 -Test
 PowerShell -ExecutionPolicy Bypass -File scripts/build.ps1 -Architecture x86 -Test

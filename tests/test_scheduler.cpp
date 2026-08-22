@@ -1,10 +1,19 @@
 #include "SettingsStore.h"
 #include "ShutdownScheduler.h"
 
+#include <windows.h>
+
 #include <cstdio>
 #include <ctime>
+#include <string>
 
 int main() {
+    wchar_t tempPath[MAX_PATH]{};
+    if (GetTempPathW(MAX_PATH, tempPath) == 0) return 1;
+    const std::wstring testAppData = std::wstring(tempPath) + L"ShutDownTests-" + std::to_wstring(GetCurrentProcessId());
+    if (!CreateDirectoryW(testAppData.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) return 1;
+    if (!SetEnvironmentVariableW(L"APPDATA", testAppData.c_str())) return 1;
+
     int failures = 0;
     auto fail = [&failures](const char *message) { std::fprintf(stderr, "FAIL: %s\n", message); ++failures; };
     SettingsStore::clearTask();
@@ -29,6 +38,9 @@ int main() {
     scheduler.pause(); if (scheduler.state() != ShutdownScheduler::State::Paused) fail("pause");
     scheduler.resume(); if (scheduler.state() != ShutdownScheduler::State::Armed) fail("resume");
     scheduler.cancel(); if (scheduler.state() != ShutdownScheduler::State::Idle) fail("cancel");
+    SettingsStore::clearTask();
+    RemoveDirectoryW((testAppData + L"\\ShutDown").c_str());
+    RemoveDirectoryW(testAppData.c_str());
     if (failures == 0) { std::puts("Win32 scheduler tests: PASS"); return 0; }
     return 1;
 }

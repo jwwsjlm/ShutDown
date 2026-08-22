@@ -12,7 +12,7 @@ class ShutdownApp final : public Win32xx::CWinApp {};
 
 int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     ShutdownApp app;
-    INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_STANDARD_CLASSES | ICC_TAB_CLASSES | ICC_LINK_CLASS};
+    INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_STANDARD_CLASSES | ICC_TAB_CLASSES};
     InitCommonControlsEx(&controls);
     AppLogger::initialize();
     const auto mutex = CreateMutexW(nullptr, TRUE, L"Local\\ShutDown.SingleInstance");

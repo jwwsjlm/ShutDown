@@ -6,19 +6,31 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $project = Split-Path -Parent $PSScriptRoot
-$build = Join-Path $project 'build-local'
-$cmakePath = 'H:\Dev\CMake\bin\cmake.exe'
-if (-not (Test-Path $cmakePath)) {
-    $cmd = Get-Command cmake -ErrorAction SilentlyContinue
-    if ($cmd) { $cmakePath = $cmd.Source }
+$cmake = Get-Command cmake -ErrorAction SilentlyContinue
+if (-not $cmake) { throw 'cmake.exe not found' }
+$ctest = Join-Path (Split-Path -Parent $cmake.Source) 'ctest.exe'
+if (-not (Test-Path -LiteralPath $ctest)) { throw 'ctest.exe not found' }
+
+$configurePreset = "windows-$Architecture"
+$buildPreset = "$configurePreset-release"
+$build = Join-Path $project "build/windows-$Architecture"
+
+if ($Clean -and (Test-Path -LiteralPath $build)) {
+    Remove-Item -LiteralPath $build -Recurse -Force
 }
-if (-not (Test-Path $cmakePath)) { throw 'cmake.exe not found' }
-if ($Clean -and (Test-Path $build)) { Remove-Item -LiteralPath $build -Recurse -Force }
-if ($Architecture -eq 'x86') { throw 'Local x86 toolchain is not installed; use x64 locally or CI for x86.' }
-$env:PATH = 'C:\TDM-GCC-64\bin;H:\Dev\CMake\bin;' + $env:PATH
-& $cmakePath -S $project -B $build -G 'MinGW Makefiles' -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-& $cmakePath --build $build --parallel
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-if ($Test) { & $cmakePath --build $build --target test; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
-Write-Host ('Build complete: ' + (Join-Path $build 'ShutDown.exe'))
+
+Push-Location $project
+try {
+    & $cmake.Source --preset $configurePreset '-DSHUTDOWN_VERSION_OVERRIDE='
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & $cmake.Source --build --preset $buildPreset --parallel
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    if ($Test) {
+        & $ctest --preset $buildPreset
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
+} finally {
+    Pop-Location
+}
+
+Write-Host ('Build complete: ' + (Join-Path $build 'Release/ShutDown.exe'))

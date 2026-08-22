@@ -18,6 +18,7 @@ public:
 
     void setCallbacks(Callbacks callbacks) { m_callbacks = std::move(callbacks); }
     void checkForUpdates();
+    void stopAndJoin();
 
     static std::string normalizeVersion(const std::string &value);
     static bool isNewerVersion(const std::string &candidate, const std::string &current);

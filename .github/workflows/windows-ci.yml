@@ -1,4 +1,4 @@
-name: Windows CI
+name: Windows build and release
 
 on:
   push:
@@ -15,16 +15,12 @@ concurrency:
 
 jobs:
   build:
-    name: Build Windows ${{ matrix.arch }}
+    name: Windows ${{ matrix.arch }}
     runs-on: windows-2022
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - arch: x64
-            cmake_arch: x64
-          - arch: x86
-            cmake_arch: Win32
+        arch: [x64, x86]
 
     steps:
       - name: Checkout
@@ -34,45 +30,60 @@ jobs:
 
       - name: Configure
         shell: pwsh
+        env:
+          ARCH: ${{ matrix.arch }}
+          REF_TYPE: ${{ github.ref_type }}
+          TAG_NAME: ${{ github.ref_name }}
         run: |
-          $versionArgs = @()
-          if ("${{ github.ref_type }}" -eq "tag") {
-            $tag = "${{ github.ref_name }}"
-            if ($tag -notmatch '^v?(\d+\.\d+\.\d+)$') {
-              throw "Tag '$tag' is not a semantic version tag like v2.0.7."
+          $versionArgs = @("-DSHUTDOWN_VERSION_OVERRIDE=")
+          if ($env:REF_TYPE -eq "tag") {
+            $tag = $env:TAG_NAME
+            if ($tag -notmatch '^v(\d+\.\d+\.\d+)$') {
+              throw "Tag '$tag' must look like v2.1.4."
             }
-            $versionArgs += "-DSHUTDOWN_VERSION_OVERRIDE=$($Matches[1])"
+            $versionArgs = @("-DSHUTDOWN_VERSION_OVERRIDE=$($Matches[1])")
           }
-          cmake -S . -B build -G "Visual Studio 17 2022" -A "${{ matrix.cmake_arch }}" @versionArgs
+          cmake --preset "windows-$env:ARCH" @versionArgs
 
       - name: Build
         shell: pwsh
-        run: cmake --build build --config Release --parallel
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: cmake --build --preset "windows-$env:ARCH-release" --parallel
 
       - name: Test
         shell: pwsh
-        run: ctest --test-dir build -C Release --output-on-failure --verbose
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: ctest --preset "windows-$env:ARCH-release"
 
-      - name: Stage app
+      - name: Package portable app
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
+        env:
+          ARCH: ${{ matrix.arch }}
         run: |
-          $package = Join-Path $pwd "app-${{ matrix.arch }}"
+          $package = Join-Path $pwd "package"
           New-Item -ItemType Directory -Path $package -Force | Out-Null
-          $exe = Join-Path $pwd "build/Release/ShutDown.exe"
-          Copy-Item $exe (Join-Path $package "ShutDown.exe") -Force
+          Copy-Item (Join-Path $pwd "build/windows-$env:ARCH/Release/ShutDown.exe") (Join-Path $package "ShutDown.exe") -Force
           Copy-Item (Join-Path $pwd "third_party/win32xx/license.txt") (Join-Path $package "Win32xx-MIT.txt") -Force
+          Compress-Archive `
+            -Path (Join-Path $package "*") `
+            -DestinationPath (Join-Path $pwd "ShutDown-win-$env:ARCH-Portable.zip") `
+            -Force
 
-      - name: Upload architecture artifact
+      - name: Upload portable package
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: ShutDown-app-${{ matrix.arch }}
-          path: |
-            app-${{ matrix.arch }}/
+          name: ShutDown-win-${{ matrix.arch }}-Portable
+          path: ShutDown-win-${{ matrix.arch }}-Portable.zip
           if-no-files-found: error
+          retention-days: 1
 
   release:
-    name: Publish Windows release
-    if: startsWith(github.ref, 'refs/tags/v')
+    name: Publish release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: windows-2022
     permissions:
@@ -80,27 +91,22 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
-        with:
-          submodules: true
 
-      - name: Download x64 artifact
+      - name: Download portable packages
         uses: actions/download-artifact@v8.0.1
         with:
-          name: ShutDown-app-x64
-          path: release/app-x64
-
-      - name: Download x86 artifact
-        uses: actions/download-artifact@v8.0.1
-        with:
-          name: ShutDown-app-x86
-          path: release/app-x86
+          pattern: ShutDown-win-*-Portable
+          path: release
+          merge-multiple: true
 
       - name: Render release notes
         shell: pwsh
+        env:
+          TAG_NAME: ${{ github.ref_name }}
         run: |
-          $tag = "${{ github.ref_name }}"
-          if ($tag -notmatch '^v?(\d+\.\d+\.\d+)$') {
-            throw "Tag '$tag' is not a semantic version tag like v2.1.4."
+          $tag = $env:TAG_NAME
+          if ($tag -notmatch '^v(\d+\.\d+\.\d+)$') {
+            throw "Tag '$tag' must look like v2.1.4."
           }
           $version = $Matches[1]
           $notes = Join-Path $pwd "release-notes/$tag.md"
@@ -112,18 +118,12 @@ jobs:
           $body = $body.Replace('vX.Y.Z', $tag).Replace('<version>', $version)
           Set-Content -LiteralPath (Join-Path $pwd "release/generated-notes.md") -Value $body -NoNewline -Encoding UTF8
 
-      - name: Build portable packages
-        shell: pwsh
-        run: |
-          $out = Join-Path $pwd "release"
-          Compress-Archive -Path (Join-Path $pwd "release/app-x64/*") -DestinationPath (Join-Path $out "ShutDown-win-x64-Portable.zip") -Force
-          Compress-Archive -Path (Join-Path $pwd "release/app-x86/*") -DestinationPath (Join-Path $out "ShutDown-win-x86-Portable.zip") -Force
-
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3.0.2
         with:
           generate_release_notes: false
           body_path: release/generated-notes.md
+          fail_on_unmatched_files: true
           files: |
             release/ShutDown-win-x64-Portable.zip
             release/ShutDown-win-x86-Portable.zip

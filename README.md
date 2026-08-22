@@ -17,7 +17,7 @@
 - 小时、分钟、秒倒计时
 - 暂停、继续、取消、立即关机
 - 最小化隐藏到系统托盘，托盘菜单显示倒计时
-- `ExitWindowsEx` → `InitiateSystemShutdownEx` → `shutdown.exe` 三级执行
+- `ExitWindowsEx` 与 `InitiateSystemShutdownEx` 双路径关机
 - 可选 `schtasks.exe` 一次性系统任务兜底
 - 手动检查 GitHub Release 更新
 

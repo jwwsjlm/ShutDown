@@ -4,6 +4,8 @@
 
 `CMakeLists.txt` 里的 `SHUTDOWN_BASE_VERSION` 是本地默认版本。GitHub Actions tag 构建时会自动从 tag 传入 `SHUTDOWN_VERSION_OVERRIDE`，并同步到程序标题、`FILEVERSION` 和 `PRODUCTVERSION`。
 
+程序检查更新时直接读取 jsDelivr 的 GitHub release/tag 元数据，并在必要时回退到多个 jsDelivr 文件节点和 GitHub Releases API；项目不再维护独立的版本清单文件。
+
 ## Release notes
 
 每个版本需要创建：
@@ -21,7 +23,7 @@ git tag -a vX.Y.Z -m "vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
-workflow 只在 `v*` tag 上发布，普通 push 到 `main` 不触发构建。
+Pull Request 和手动运行只执行 x64/x86 编译与测试；只有推送 `v*` tag 才会生成便携 ZIP 并发布 Release。普通 push 到 `main` 不触发 workflow。
 
 ## 发布资产
 

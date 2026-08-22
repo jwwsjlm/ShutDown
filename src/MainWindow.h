@@ -34,6 +34,11 @@ private:
     };
 
     void createControls();
+    void recreateControlsForDpi(int dpi);
+    void resizeToContent();
+    void applyTheme();
+    int scale(int value) const;
+    static bool systemPrefersDark();
     void createTray();
     void destroyTray();
     void restorePersistedTask();
@@ -45,6 +50,7 @@ private:
     void togglePause();
     void executeNow();
     void checkForUpdates();
+    void refreshUpdateButton();
     void handleEvent(std::unique_ptr<UiEvent> event);
     void updateState(ShutdownScheduler::State state);
     void updateRemaining(std::int64_t seconds);
@@ -60,9 +66,16 @@ private:
     ShutdownScheduler m_scheduler;
     std::wstring m_windowTitle;
     HFONT m_font = nullptr;
+    HFONT m_fontLarge = nullptr;
+    HFONT m_linkFont = nullptr;
+    HBRUSH m_bgBrush = nullptr;
+    HBRUSH m_editBrush = nullptr;
+    int m_dpi = 96;
+    bool m_dark = false;
     NOTIFYICONDATAW m_tray{};
     bool m_trayCreated = false;
     bool m_forceQuit = false;
+    bool m_updateCheckInProgress = false;
     HWND m_dateEdit = nullptr;
     HWND m_timeEdit = nullptr;
     HWND m_hours = nullptr;

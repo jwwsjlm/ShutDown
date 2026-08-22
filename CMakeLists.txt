@@ -57,7 +57,10 @@ set_source_files_properties("${SHUTDOWN_RC_FILE}" PROPERTIES
     OBJECT_DEPENDS "${SHUTDOWN_MANIFEST_FILE};${SHUTDOWN_ICON_FILE};${SHUTDOWN_RC_INCLUDE};${CMAKE_CURRENT_SOURCE_DIR}/resources/app.rc.in"
 )
 target_include_directories(ShutDown PRIVATE src third_party/win32xx/include)
-target_link_libraries(ShutDown PRIVATE win32xx::win32xx comctl32 shell32 advapi32 user32 gdi32 ole32 uxtheme winhttp)
+target_link_libraries(ShutDown PRIVATE win32xx::win32xx comctl32 shell32 advapi32 user32 gdi32 ole32 uxtheme dwmapi winhttp)
+if(MSVC)
+    target_link_options(ShutDown PRIVATE "/MANIFEST:NO")
+endif()
 target_compile_definitions(ShutDown PRIVATE
     UNICODE
     _UNICODE

@@ -6,6 +6,7 @@
 #include "../resources/resource.h"
 
 #include <commctrl.h>
+#include <dwmapi.h>
 #include <shellapi.h>
 #include <uxtheme.h>
 #include <windows.h>
@@ -18,6 +19,7 @@
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "uxtheme.lib")
+#pragma comment(lib, "dwmapi.lib")
 #endif
 
 namespace {
@@ -32,12 +34,27 @@ constexpr UINT WM_UI_EVENT = WM_APP + 11;
 constexpr UINT TIMER_SCHEDULER = 1;
 constexpr wchar_t kProjectUrl[] = L"https://github.com/jwwsjlm/ShutDown";
 constexpr wchar_t kLatestReleaseUrl[] = L"https://github.com/jwwsjlm/ShutDown/releases/latest";
+// Win10 1903 之前头文件里没有这个枚举值，直接写字面量，旧系统上调用只会返回错误码。
+constexpr DWORD kDwmwaUseImmersiveDarkMode = 20;
+constexpr COLORREF kDarkBg = RGB(32, 32, 32);
+constexpr COLORREF kDarkEditBg = RGB(43, 43, 43);
+constexpr COLORREF kDarkText = RGB(230, 230, 230);
+constexpr COLORREF kDarkAccent = RGB(76, 194, 255);
+constexpr COLORREF kLightLink = RGB(0, 102, 204);
 
 HWND control(DWORD exStyle, LPCWSTR cls, LPCWSTR title, DWORD style, int x, int y, int w, int h, HWND parent, int id) {
-    return CreateWindowExW(exStyle, cls, title, style, x, y, w, h, parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), GetModuleHandleW(nullptr), nullptr);
+    return CreateWindowExW(exStyle, cls, title, style, x, y, w, h, parent,
+                           reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
+                           GetModuleHandleW(nullptr), nullptr);
 }
 
 void setFont(HWND hwnd, HFONT font) { SendMessageW(hwnd, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE); }
+
+void makeStaticTransparent(HWND hwnd) {
+    if (!hwnd) return;
+    const LONG_PTR style = ::GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    ::SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style | WS_EX_TRANSPARENT);
+}
 
 bool isChecked(HWND hwnd) { return SendMessageW(hwnd, BM_GETCHECK, 0, 0) == BST_CHECKED; }
 
@@ -118,7 +135,14 @@ MainWindow::MainWindow(std::string version)
     m_updateManager.setCallbacks(std::move(callbacks));
 }
 
-MainWindow::~MainWindow() { destroyTray(); if (m_font) DeleteObject(m_font); }
+MainWindow::~MainWindow() {
+    destroyTray();
+    if (m_font) DeleteObject(m_font);
+    if (m_fontLarge) DeleteObject(m_fontLarge);
+    if (m_linkFont) DeleteObject(m_linkFont);
+    if (m_bgBrush) DeleteObject(m_bgBrush);
+    if (m_editBrush) DeleteObject(m_editBrush);
+}
 
 void MainWindow::PreRegisterClass(WNDCLASS &wc) {
     wc.lpszClassName = L"ShutDown.Win32xx.MainWindow";
@@ -148,63 +172,161 @@ HWND MainWindow::CreateMain() {
 int MainWindow::OnCreate(CREATESTRUCT &) {
     SendMessageW(GetHwnd(), WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(loadAppIcon(32)));
     SendMessageW(GetHwnd(), WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(loadAppIcon(16)));
-    m_font = CreateFontW(-14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
-    createControls(); createTray(); restorePersistedTask();
+    const HDC dc = ::GetDC(GetHwnd());
+    m_dpi = dc ? ::GetDeviceCaps(dc, LOGPIXELSX) : USER_DEFAULT_SCREEN_DPI;
+    if (dc) ::ReleaseDC(GetHwnd(), dc);
+    if (m_dpi <= 0) m_dpi = USER_DEFAULT_SCREEN_DPI;
+    createControls(); applyTheme(); resizeToContent();
+    createTray(); restorePersistedTask();
     ::SetTimer(GetHwnd(), TIMER_SCHEDULER, 1000, nullptr);
     return 0;
 }
 
+int MainWindow::scale(int value) const { return ::MulDiv(value, m_dpi, 96); }
+
+void MainWindow::resizeToContent() {
+    RECT rect{0, 0, scale(526), scale(314)};
+    ::AdjustWindowRect(&rect, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, FALSE);
+    ::SetWindowPos(GetHwnd(), nullptr, 0, 0, rect.right - rect.left, rect.bottom - rect.top, SWP_NOMOVE | SWP_NOZORDER);
+}
+
+bool MainWindow::systemPrefersDark() {
+    DWORD value = 1, size = sizeof(value);
+    HKEY key = nullptr;
+    if (::RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                        0, KEY_READ, &key) != ERROR_SUCCESS)
+        return false;
+    const bool light = ::RegQueryValueExW(key, L"AppsUseLightTheme", nullptr, nullptr,
+                                          reinterpret_cast<LPBYTE>(&value), &size) == ERROR_SUCCESS && value != 0;
+    ::RegCloseKey(key);
+    return !light;
+}
+
+void MainWindow::applyTheme() {
+    m_dark = systemPrefersDark();
+    if (m_bgBrush) ::DeleteObject(m_bgBrush);
+    if (m_editBrush) ::DeleteObject(m_editBrush);
+    m_bgBrush = ::CreateSolidBrush(m_dark ? kDarkBg : ::GetSysColor(COLOR_BTNFACE));
+    m_editBrush = ::CreateSolidBrush(kDarkEditBg);
+    const wchar_t *theme = m_dark ? L"DarkMode_Explorer" : L"Explorer";
+    if (m_tab) ::SetWindowTheme(m_tab, theme, nullptr);
+    for (HWND child : m_mainControls) if (child) ::SetWindowTheme(child, theme, nullptr);
+    for (HWND child : m_settingsControls) if (child) ::SetWindowTheme(child, theme, nullptr);
+    // Win10 1903 以下该属性不受支持，调用失败即可，保持浅色标题栏。
+    const BOOL dark = m_dark ? TRUE : FALSE;
+    ::DwmSetWindowAttribute(GetHwnd(), kDwmwaUseImmersiveDarkMode, &dark, sizeof(dark));
+    repaintWindow(GetHwnd());
+}
+
+void MainWindow::recreateControlsForDpi(int dpi) {
+    // 跨显示器拖动时 DPI 变化，绝对布局只能销毁重建；先保留用户已输入的内容。
+    const bool force = isChecked(m_force), fallback = isChecked(m_fallback);
+    const std::wstring hours = text(m_hours), minutes = text(m_minutes), seconds = text(m_seconds);
+    const auto pickedTarget = pickerDateTime(m_dateEdit, m_timeEdit);
+    const bool settingsPage = m_tab && TabCtrl_GetCurSel(m_tab) == 1;
+    HWND focus = ::GetFocus();
+    HWND focusRoot = focus;
+    while (focusRoot && ::GetParent(focusRoot) != GetHwnd()) focusRoot = ::GetParent(focusRoot);
+    const int focusId = focusRoot ? ::GetDlgCtrlID(focusRoot) : 0;
+    DWORD hoursStart = 0, hoursEnd = 0, minutesStart = 0, minutesEnd = 0, secondsStart = 0, secondsEnd = 0;
+    if (m_hours) SendMessageW(m_hours, EM_GETSEL, reinterpret_cast<WPARAM>(&hoursStart), reinterpret_cast<LPARAM>(&hoursEnd));
+    if (m_minutes) SendMessageW(m_minutes, EM_GETSEL, reinterpret_cast<WPARAM>(&minutesStart), reinterpret_cast<LPARAM>(&minutesEnd));
+    if (m_seconds) SendMessageW(m_seconds, EM_GETSEL, reinterpret_cast<WPARAM>(&secondsStart), reinterpret_cast<LPARAM>(&secondsEnd));
+    for (HWND child : m_mainControls) if (child) ::DestroyWindow(child);
+    for (HWND child : m_settingsControls) if (child) ::DestroyWindow(child);
+    if (m_tab) ::DestroyWindow(m_tab);
+    m_mainControls.clear(); m_settingsControls.clear(); m_tab = nullptr;
+    m_dpi = dpi > 0 ? dpi : m_dpi;
+    createControls(); applyTheme();
+    if (settingsPage) setSettingsVisible(true);
+    SendMessageW(m_force, BM_SETCHECK, force ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(m_fallback, BM_SETCHECK, fallback ? BST_CHECKED : BST_UNCHECKED, 0);
+    ::SetWindowTextW(m_hours, hours.c_str());
+    ::SetWindowTextW(m_minutes, minutes.c_str());
+    ::SetWindowTextW(m_seconds, seconds.c_str());
+    SendMessageW(m_hours, EM_SETSEL, hoursStart, hoursEnd);
+    SendMessageW(m_minutes, EM_SETSEL, minutesStart, minutesEnd);
+    SendMessageW(m_seconds, EM_SETSEL, secondsStart, secondsEnd);
+    if (pickedTarget > 0) setPickerDateTime(m_dateEdit, m_timeEdit, pickedTarget);
+    updateState(m_scheduler.state());
+    updateRemaining(m_scheduler.remainingSeconds());
+    refreshUpdateButton();
+    if (focusId != 0) {
+        HWND restoredFocus = ::GetDlgItem(GetHwnd(), focusId);
+        if (restoredFocus && ::IsWindowVisible(restoredFocus) && ::IsWindowEnabled(restoredFocus)) ::SetFocus(restoredFocus);
+    }
+}
+
 void MainWindow::createControls() {
-    const int tabLeft = 8, tabTop = 8, tabWidth = 510;
-    m_tab = control(0, WC_TABCONTROLW, L"", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, tabLeft, tabTop, tabWidth, 298, GetHwnd(), IDC_TAB);
+    if (m_font) { ::DeleteObject(m_font); m_font = nullptr; }
+    if (m_fontLarge) { ::DeleteObject(m_fontLarge); m_fontLarge = nullptr; }
+    if (m_linkFont) { ::DeleteObject(m_linkFont); m_linkFont = nullptr; }
+    const int fontHeight = scale(14), largeFontHeight = scale(20);
+    m_font = CreateFontW(-fontHeight, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
+    m_fontLarge = CreateFontW(-largeFontHeight, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
+    LOGFONTW linkLogFont{};
+    if (m_font && ::GetObjectW(m_font, sizeof(linkLogFont), &linkLogFont) == sizeof(linkLogFont)) {
+        linkLogFont.lfUnderline = TRUE;
+        m_linkFont = ::CreateFontIndirectW(&linkLogFont);
+    }
+
+    m_tab = control(0, WC_TABCONTROLW, L"", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, scale(8), scale(8), scale(510), scale(298), GetHwnd(), IDC_TAB);
     TCITEMW item{};
     item.mask = TCIF_TEXT;
     item.pszText = const_cast<LPWSTR>(L"主界面");
     TabCtrl_InsertItem(m_tab, 0, &item);
     item.pszText = const_cast<LPWSTR>(L"设置");
     TabCtrl_InsertItem(m_tab, 1, &item);
-    ::SetWindowTheme(m_tab, L"Explorer", nullptr);
 
-    const int left = 20, width = 494;
-    auto *groupAt = control(0, L"BUTTON", L"指定日期和时间", BS_GROUPBOX | WS_CHILD | WS_VISIBLE, left, 40, width, 70, GetHwnd(), 0);
-    auto *labelAt = control(0, L"STATIC", L"关机时间:", WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE, 34, 65, 74, 26, GetHwnd(), 0);
-    m_dateEdit = control(0, DATETIMEPICK_CLASSW, L"", WS_CHILD | WS_VISIBLE | DTS_SHORTDATECENTURYFORMAT, 108, 63, 142, 28, GetHwnd(), IDC_DATE);
-    m_timeEdit = control(0, DATETIMEPICK_CLASSW, L"", WS_CHILD | WS_VISIBLE | DTS_TIMEFORMAT | DTS_UPDOWN, 260, 63, 92, 28, GetHwnd(), IDC_TIME);
+    auto *groupAt = control(0, L"BUTTON", L"指定日期和时间", BS_GROUPBOX | WS_CHILD | WS_VISIBLE, scale(20), scale(40), scale(494), scale(70), GetHwnd(), 0);
+    auto *labelAt = control(0, L"STATIC", L"关机时间:", WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE, scale(34), scale(65), scale(74), scale(26), GetHwnd(), 0);
+    m_dateEdit = control(0, DATETIMEPICK_CLASSW, L"", WS_CHILD | WS_VISIBLE | DTS_SHORTDATECENTURYFORMAT, scale(108), scale(63), scale(142), scale(28), GetHwnd(), IDC_DATE);
+    m_timeEdit = control(0, DATETIMEPICK_CLASSW, L"", WS_CHILD | WS_VISIBLE | DTS_TIMEFORMAT | DTS_UPDOWN, scale(260), scale(63), scale(92), scale(28), GetHwnd(), IDC_TIME);
     DateTime_SetFormat(m_timeEdit, L"HH:mm:ss");
     setPickerDateTime(m_dateEdit, m_timeEdit, std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()) + 3600);
-    auto *atButton = control(0, L"BUTTON", L"设置定时关机", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 386, 62, 116, 30, GetHwnd(), IDC_AT);
-    auto *groupCount = control(0, L"BUTTON", L"倒计时关机", BS_GROUPBOX | WS_CHILD | WS_VISIBLE, left, 120, width, 70, GetHwnd(), 0);
-    auto *countLabel = control(0, L"STATIC", L"时长:", WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE, 34, 145, 52, 26, GetHwnd(), 0);
-    m_hours = control(WS_EX_CLIENTEDGE, L"EDIT", L"0", WS_CHILD | WS_VISIBLE | ES_NUMBER, 88, 143, 50, 28, GetHwnd(), IDC_HOURS);
-    m_minutes = control(WS_EX_CLIENTEDGE, L"EDIT", L"0", WS_CHILD | WS_VISIBLE | ES_NUMBER, 160, 143, 50, 28, GetHwnd(), IDC_MINUTES);
-    m_seconds = control(WS_EX_CLIENTEDGE, L"EDIT", L"0", WS_CHILD | WS_VISIBLE | ES_NUMBER, 232, 143, 50, 28, GetHwnd(), IDC_SECONDS);
-    auto *hoursLabel = control(0, L"STATIC", L"时", WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE, 142, 145, 18, 26, GetHwnd(), 0);
-    auto *minutesLabel = control(0, L"STATIC", L"分", WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE, 214, 145, 18, 26, GetHwnd(), 0);
-    auto *secondsLabel = control(0, L"STATIC", L"秒", WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE, 286, 145, 18, 26, GetHwnd(), 0);
-    auto *countButton = control(0, L"BUTTON", L"开始倒计时", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 386, 142, 116, 30, GetHwnd(), IDC_COUNTDOWN);
-    auto *groupStatus = control(0, L"BUTTON", L"当前任务", BS_GROUPBOX | WS_CHILD | WS_VISIBLE, left, 200, width, 54, GetHwnd(), 0);
-    auto *statusLabel = control(0, L"STATIC", L"状态:", WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE, 34, 220, 52, 26, GetHwnd(), 0);
-    m_status = control(0, L"STATIC", L"空闲", WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE, 88, 220, 145, 26, GetHwnd(), IDC_STATUS);
-    auto *remainingLabel = control(0, L"STATIC", L"剩余:", WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE, 270, 220, 52, 26, GetHwnd(), 0);
-    m_remaining = control(0, L"STATIC", L"--", WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE, 324, 220, 170, 26, GetHwnd(), IDC_REMAINING);
-    m_pause = control(0, L"BUTTON", L"暂停", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON | WS_DISABLED, 48, 266, 100, 30, GetHwnd(), IDC_PAUSE);
-    auto *cancelButton = control(0, L"BUTTON", L"取消任务", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 164, 266, 100, 30, GetHwnd(), IDC_CANCEL);
-    auto *nowButton = control(0, L"BUTTON", L"立即关机", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 280, 266, 100, 30, GetHwnd(), IDC_NOW);
+    auto *atButton = control(0, L"BUTTON", L"设置定时关机", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, scale(386), scale(62), scale(116), scale(30), GetHwnd(), IDC_AT);
+    auto *groupCount = control(0, L"BUTTON", L"倒计时关机", BS_GROUPBOX | WS_CHILD | WS_VISIBLE, scale(20), scale(120), scale(494), scale(70), GetHwnd(), 0);
+    auto *countLabel = control(0, L"STATIC", L"时长:", WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE, scale(34), scale(145), scale(52), scale(26), GetHwnd(), 0);
+    m_hours = control(WS_EX_CLIENTEDGE, L"EDIT", L"0", WS_CHILD | WS_VISIBLE | ES_NUMBER, scale(88), scale(143), scale(50), scale(28), GetHwnd(), IDC_HOURS);
+    m_minutes = control(WS_EX_CLIENTEDGE, L"EDIT", L"0", WS_CHILD | WS_VISIBLE | ES_NUMBER, scale(160), scale(143), scale(50), scale(28), GetHwnd(), IDC_MINUTES);
+    m_seconds = control(WS_EX_CLIENTEDGE, L"EDIT", L"0", WS_CHILD | WS_VISIBLE | ES_NUMBER, scale(232), scale(143), scale(50), scale(28), GetHwnd(), IDC_SECONDS);
+    auto *hoursLabel = control(0, L"STATIC", L"时", WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE, scale(142), scale(145), scale(18), scale(26), GetHwnd(), 0);
+    auto *minutesLabel = control(0, L"STATIC", L"分", WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE, scale(214), scale(145), scale(18), scale(26), GetHwnd(), 0);
+    auto *secondsLabel = control(0, L"STATIC", L"秒", WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE, scale(286), scale(145), scale(18), scale(26), GetHwnd(), 0);
+    auto *countButton = control(0, L"BUTTON", L"开始倒计时", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, scale(386), scale(142), scale(116), scale(30), GetHwnd(), IDC_COUNTDOWN);
+    auto *groupStatus = control(0, L"BUTTON", L"当前任务", BS_GROUPBOX | WS_CHILD | WS_VISIBLE, scale(20), scale(200), scale(494), scale(54), GetHwnd(), 0);
+    auto *statusLabel = control(0, L"STATIC", L"状态:", WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE, scale(34), scale(220), scale(52), scale(26), GetHwnd(), 0);
+    m_status = control(0, L"STATIC", L"空闲", WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE, scale(88), scale(220), scale(145), scale(26), GetHwnd(), IDC_STATUS);
+    auto *remainingLabel = control(0, L"STATIC", L"剩余:", WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE, scale(270), scale(220), scale(52), scale(26), GetHwnd(), 0);
+    m_remaining = control(0, L"STATIC", L"--", WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE, scale(324), scale(219), scale(170), scale(28), GetHwnd(), IDC_REMAINING);
+    m_pause = control(0, L"BUTTON", L"暂停", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON | WS_DISABLED, scale(48), scale(266), scale(100), scale(30), GetHwnd(), IDC_PAUSE);
+    auto *cancelButton = control(0, L"BUTTON", L"取消任务", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, scale(164), scale(266), scale(100), scale(30), GetHwnd(), IDC_CANCEL);
+    auto *nowButton = control(0, L"BUTTON", L"立即关机", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, scale(280), scale(266), scale(100), scale(30), GetHwnd(), IDC_NOW);
 
-    m_settingsGroup = control(0, L"BUTTON", L"设置选项", BS_GROUPBOX | WS_CHILD, left, 40, width, 214, GetHwnd(), 0);
-    m_force = control(0, L"BUTTON", L"强制关闭应用（可能丢失未保存数据）", WS_CHILD | WS_TABSTOP | BS_AUTOCHECKBOX, 44, 72, 430, 24, GetHwnd(), IDC_FORCE);
-    m_fallback = control(0, L"BUTTON", L"启用 Task Scheduler 系统兜底", WS_CHILD | WS_TABSTOP | BS_AUTOCHECKBOX, 44, 104, 400, 24, GetHwnd(), IDC_FALLBACK);
-    m_checkUpdate = control(0, L"BUTTON", L"检查更新", WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON, 44, 148, 118, 30, GetHwnd(), IDC_CHECK);
-    auto *projectLabel = control(0, L"STATIC", L"项目主页:", WS_CHILD | SS_CENTERIMAGE, 44, 194, 74, 24, GetHwnd(), 0);
-    m_githubLink = control(0, WC_LINK, L"<a href=\"https://github.com/jwwsjlm/ShutDown\">GitHub 项目主页</a>", WS_CHILD | WS_TABSTOP, 118, 194, 240, 24, GetHwnd(), IDC_GITHUB);
+    m_settingsGroup = control(0, L"BUTTON", L"设置选项", BS_GROUPBOX | WS_CHILD, scale(20), scale(40), scale(494), scale(214), GetHwnd(), 0);
+    m_force = control(0, L"BUTTON", L"强制关闭应用（可能丢失未保存数据）", WS_CHILD | WS_TABSTOP | BS_AUTOCHECKBOX, scale(44), scale(72), scale(430), scale(24), GetHwnd(), IDC_FORCE);
+    m_fallback = control(0, L"BUTTON", L"启用 Task Scheduler 系统兜底", WS_CHILD | WS_TABSTOP | BS_AUTOCHECKBOX, scale(44), scale(104), scale(400), scale(24), GetHwnd(), IDC_FALLBACK);
+    m_checkUpdate = control(0, L"BUTTON", L"检查更新", WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON, scale(44), scale(148), scale(118), scale(30), GetHwnd(), IDC_CHECK);
+    auto *projectLabel = control(0, L"STATIC", L"项目主页:", WS_CHILD | SS_CENTERIMAGE, scale(44), scale(194), scale(74), scale(24), GetHwnd(), 0);
+    m_githubLink = control(0, L"STATIC", L"GitHub 项目主页", WS_CHILD | WS_TABSTOP | SS_NOTIFY | SS_CENTERIMAGE,
+                           scale(118), scale(194), scale(240), scale(24), GetHwnd(), IDC_GITHUB);
     m_mainControls = {groupAt, labelAt, m_dateEdit, m_timeEdit, atButton, groupCount, countLabel, m_hours, m_minutes, m_seconds,
                       hoursLabel, minutesLabel, secondsLabel, countButton, groupStatus, statusLabel, m_status, remainingLabel,
                       m_remaining, m_pause, cancelButton, nowButton};
     m_settingsControls = {m_settingsGroup, m_force, m_fallback, m_checkUpdate, projectLabel, m_githubLink};
     for (HWND child : m_mainControls) setFont(child, m_font);
     for (HWND child : m_settingsControls) setFont(child, m_font);
+    for (HWND child : m_mainControls) {
+        wchar_t className[16]{};
+        if (child && ::GetClassNameW(child, className, 16) && ::lstrcmpiW(className, L"Static") == 0)
+            makeStaticTransparent(child);
+    }
+    makeStaticTransparent(projectLabel);
+    makeStaticTransparent(m_githubLink);
+    setFont(m_githubLink, m_linkFont ? m_linkFont : m_font);
+    setFont(m_remaining, m_fontLarge);
     setFont(m_tab, m_font);
-    EnumChildWindows(GetHwnd(), [](HWND hwnd, LPARAM font) { setFont(hwnd, reinterpret_cast<HFONT>(font)); return TRUE; }, reinterpret_cast<LPARAM>(m_font));
+    refreshUpdateButton();
     setSettingsVisible(false);
 }
 
@@ -274,7 +396,16 @@ void MainWindow::executeNow() {
 }
 
 void MainWindow::checkForUpdates() {
-    ::EnableWindow(m_checkUpdate, FALSE); setText(m_checkUpdate, L"检查中..."); m_updateManager.checkForUpdates();
+    if (m_updateCheckInProgress) return;
+    m_updateCheckInProgress = true;
+    refreshUpdateButton();
+    m_updateManager.checkForUpdates();
+}
+
+void MainWindow::refreshUpdateButton() {
+    if (!m_checkUpdate) return;
+    ::EnableWindow(m_checkUpdate, m_updateCheckInProgress ? FALSE : TRUE);
+    setText(m_checkUpdate, m_updateCheckInProgress ? L"检查中..." : L"检查更新");
 }
 
 std::wstring MainWindow::formatDuration(std::int64_t seconds) {
@@ -309,17 +440,22 @@ void MainWindow::showFromTray() { ::ShowWindow(GetHwnd(), SW_SHOWNORMAL); ::SetF
 void MainWindow::post(UiEvent *event) { if (!PostMessageW(GetHwnd(), WM_UI_EVENT, 0, reinterpret_cast<LPARAM>(event))) delete event; }
 
 void MainWindow::handleEvent(std::unique_ptr<UiEvent> event) {
+    m_updateCheckInProgress = false;
+    refreshUpdateButton();
     switch (event->type) {
     case UiEvent::Type::UpdateAvailable:
-        ::EnableWindow(m_checkUpdate, TRUE); setText(m_checkUpdate, L"检查更新");
         if (::MessageBoxW(GetHwnd(), updatePromptText(event->version).c_str(), L"发现新版本", MB_YESNO | MB_ICONINFORMATION) == IDYES) openUrl(GetHwnd(), kLatestReleaseUrl);
         break;
-    case UiEvent::Type::NoUpdate: ::EnableWindow(m_checkUpdate, TRUE); setText(m_checkUpdate, L"检查更新"); ::MessageBoxW(GetHwnd(), L"当前已经是最新版本。", L"检查更新", MB_OK | MB_ICONINFORMATION); break;
-    case UiEvent::Type::CheckError: ::EnableWindow(m_checkUpdate, TRUE); setText(m_checkUpdate, L"检查更新"); ::MessageBoxW(GetHwnd(), event->text.c_str(), L"检查更新失败", MB_OK | MB_ICONWARNING); break;
+    case UiEvent::Type::NoUpdate: ::MessageBoxW(GetHwnd(), L"当前已经是最新版本。", L"检查更新", MB_OK | MB_ICONINFORMATION); break;
+    case UiEvent::Type::CheckError: ::MessageBoxW(GetHwnd(), event->text.c_str(), L"检查更新失败", MB_OK | MB_ICONWARNING); break;
     }
 }
 
 BOOL MainWindow::OnCommand(WPARAM wparam, LPARAM) {
+    if (LOWORD(wparam) == IDC_GITHUB && HIWORD(wparam) == STN_CLICKED) {
+        openUrl(GetHwnd(), kProjectUrl);
+        return TRUE;
+    }
     switch (LOWORD(wparam)) { case IDC_AT: scheduleAt(); return TRUE; case IDC_COUNTDOWN: scheduleCountdown(); return TRUE; case IDC_PAUSE: togglePause(); return TRUE; case IDC_CANCEL: cancelTask(); return TRUE; case IDC_NOW: executeNow(); return TRUE; case IDC_CHECK: checkForUpdates(); return TRUE; }
     return FALSE;
 }
@@ -328,11 +464,6 @@ LRESULT MainWindow::OnNotify(WPARAM wparam, LPARAM lparam) {
     auto *notify = reinterpret_cast<NMHDR *>(lparam);
     if (notify && (notify->hwndFrom == m_tab || static_cast<int>(notify->idFrom) == IDC_TAB)) {
         setSettingsVisible(TabCtrl_GetCurSel(m_tab) == 1);
-        return TRUE;
-    }
-    if (notify && static_cast<int>(notify->idFrom) == IDC_GITHUB &&
-        (notify->code == NM_CLICK || notify->code == NM_RETURN)) {
-        openUrl(GetHwnd(), kProjectUrl);
         return TRUE;
     }
     return CWnd::OnNotify(wparam, lparam);
@@ -346,7 +477,17 @@ bool MainWindow::askCloseWithActiveTask() {
 }
 
 void MainWindow::OnClose() { if (!m_forceQuit && m_scheduler.isActive() && !askCloseWithActiveTask()) return; DestroyWindow(GetHwnd()); }
-void MainWindow::OnDestroy() { destroyTray(); PostQuitMessage(0); }
+void MainWindow::OnDestroy() {
+    m_updateCheckInProgress = false;
+    ::KillTimer(GetHwnd(), TIMER_SCHEDULER);
+    m_updateManager.stopAndJoin();
+    MSG message{};
+    while (::PeekMessageW(&message, GetHwnd(), WM_UI_EVENT, WM_UI_EVENT, PM_REMOVE)) {
+        delete reinterpret_cast<UiEvent *>(message.lParam);
+    }
+    destroyTray();
+    PostQuitMessage(0);
+}
 
 LRESULT MainWindow::WndProc(UINT msg, WPARAM wparam, LPARAM lparam) {
     if (msg == WM_TIMER) { if (wparam == TIMER_SCHEDULER) m_scheduler.tick(); return 0; }
@@ -368,7 +509,7 @@ LRESULT MainWindow::WndProc(UINT msg, WPARAM wparam, LPARAM lparam) {
             AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
             AppendMenuW(menu, MF_STRING, ID_TRAY_SHOW, L"显示窗口");
             AppendMenuW(menu, MF_STRING, ID_TRAY_CANCEL, L"取消任务");
-            AppendMenuW(menu, MF_STRING, ID_TRAY_CHECK, L"检查更新");
+            AppendMenuW(menu, MF_STRING | (m_updateCheckInProgress ? MF_GRAYED : MF_ENABLED), ID_TRAY_CHECK, L"检查更新");
             AppendMenuW(menu, MF_STRING, ID_TRAY_NOW, L"立即关机");
             AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
             AppendMenuW(menu, MF_STRING, ID_TRAY_EXIT, L"退出");
@@ -382,6 +523,47 @@ LRESULT MainWindow::WndProc(UINT msg, WPARAM wparam, LPARAM lparam) {
             else if (cmd == ID_TRAY_EXIT) { m_forceQuit = true; DestroyWindow(GetHwnd()); }
         }
         return 0;
+    }
+    if (msg == WM_DPICHANGED) {
+        const auto *suggested = reinterpret_cast<RECT *>(lparam);
+        ::SetWindowPos(GetHwnd(), nullptr, suggested->left, suggested->top,
+                       suggested->right - suggested->left, suggested->bottom - suggested->top,
+                       SWP_NOZORDER | SWP_NOACTIVATE);
+        recreateControlsForDpi(LOWORD(wparam));
+        return 0;
+    }
+    if (msg == WM_SETTINGCHANGE && lparam && wcscmp(reinterpret_cast<LPCWSTR>(lparam), L"ImmersiveColorSet") == 0) {
+        applyTheme();
+        return 0;
+    }
+    if (msg == WM_ERASEBKGND && m_dark && m_bgBrush) {
+        RECT rect{};
+        ::GetClientRect(GetHwnd(), &rect);
+        ::FillRect(reinterpret_cast<HDC>(wparam), &rect, m_bgBrush);
+        return 1;
+    }
+    if (msg == WM_CTLCOLORSTATIC) {
+        const HDC dc = reinterpret_cast<HDC>(wparam);
+        const HWND target = reinterpret_cast<HWND>(lparam);
+        ::SetBkMode(dc, TRANSPARENT);
+        if (target == m_githubLink) {
+            ::SetTextColor(dc, m_dark ? kDarkAccent : kLightLink);
+        } else if (m_dark) {
+            ::SetTextColor(dc, target == m_remaining ? kDarkAccent : kDarkText);
+        } else {
+            ::SetTextColor(dc, ::GetSysColor(COLOR_WINDOWTEXT));
+        }
+        return reinterpret_cast<LRESULT>(::GetStockObject(NULL_BRUSH));
+    }
+    if (m_dark && m_editBrush && msg == WM_CTLCOLOREDIT) {
+        const HDC dc = reinterpret_cast<HDC>(wparam);
+        ::SetBkColor(dc, kDarkEditBg);
+        ::SetTextColor(dc, kDarkText);
+        return reinterpret_cast<LRESULT>(m_editBrush);
+    }
+    if (msg == WM_SETCURSOR && reinterpret_cast<HWND>(wparam) == m_githubLink) {
+        ::SetCursor(::LoadCursorW(nullptr, IDC_HAND));
+        return TRUE;
     }
     if (msg == WM_UI_EVENT) { handleEvent(std::unique_ptr<UiEvent>(reinterpret_cast<UiEvent *>(lparam))); return 0; }
     return CWnd::WndProc(msg, wparam, lparam);

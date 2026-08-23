@@ -78,7 +78,7 @@ bool ShutdownScheduler::arm(const PersistedTask &task, std::wstring *errorMessag
     }
     setState(task.paused ? State::Paused : State::Armed);
     persist();
-    if (m_remainingCallback) m_remainingCallback(remainingSeconds());
+    notifyRemaining(remainingSeconds());
     return true;
 }
 
@@ -91,7 +91,7 @@ void ShutdownScheduler::cancel() {
     m_fallback = false;
     SettingsStore::clearTask();
     setState(State::Idle);
-    if (m_remainingCallback) m_remainingCallback(0);
+    notifyRemaining(0);
 }
 
 void ShutdownScheduler::pause() {
@@ -99,6 +99,7 @@ void ShutdownScheduler::pause() {
     m_pausedRemaining = remainingSeconds();
     if (m_fallback) TaskSchedulerFallback::remove(nullptr);
     setState(State::Paused);
+    notifyRemaining(m_pausedRemaining);
     persist();
 }
 
@@ -121,12 +122,9 @@ void ShutdownScheduler::tick() {
     // 空闲状态没有任务，不能因为 remainingSeconds()==0 而执行关机。
     // 这是启动后定时器第一次触发时直接关机的根因。
     if (!isActive()) return;
-    if (m_state == State::Paused) {
-        if (m_remainingCallback) m_remainingCallback(m_pausedRemaining);
-        return;
-    }
+    if (m_state == State::Paused) return;
     const auto remaining = remainingSeconds();
-    if (m_remainingCallback) m_remainingCallback(remaining);
+    notifyRemaining(remaining);
     if (remaining > 0) return;
     setState(State::Executing);
     std::wstring error;
@@ -145,6 +143,13 @@ void ShutdownScheduler::setState(State state) {
     if (m_state == state) return;
     m_state = state;
     if (m_stateCallback) m_stateCallback(state);
+}
+
+void ShutdownScheduler::notifyRemaining(std::int64_t seconds) {
+    if (m_hasReportedRemaining && seconds == m_lastReportedRemaining) return;
+    m_lastReportedRemaining = seconds;
+    m_hasReportedRemaining = true;
+    if (m_remainingCallback) m_remainingCallback(seconds);
 }
 
 void ShutdownScheduler::persist() const {

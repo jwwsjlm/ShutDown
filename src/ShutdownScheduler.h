@@ -27,12 +27,13 @@ public:
     void tick();
 
     void setStateCallback(StateCallback callback) { m_stateCallback = std::move(callback); }
-    void setRemainingCallback(RemainingCallback callback) { m_remainingCallback = std::move(callback); }
+    void setRemainingCallback(RemainingCallback callback) { m_remainingCallback = std::move(callback); m_hasReportedRemaining = false; }
     void setErrorCallback(ErrorCallback callback) { m_errorCallback = std::move(callback); }
 
 private:
     bool arm(const PersistedTask &task, std::wstring *errorMessage);
     void setState(State state);
+    void notifyRemaining(std::int64_t seconds);
     void persist() const;
 
     State m_state = State::Idle;
@@ -40,6 +41,8 @@ private:
     std::int64_t m_pausedRemaining = 0;
     bool m_force = false;
     bool m_fallback = false;
+    bool m_hasReportedRemaining = false;
+    std::int64_t m_lastReportedRemaining = 0;
     PersistedTask::Type m_type = PersistedTask::Type::None;
     StateCallback m_stateCallback;
     RemainingCallback m_remainingCallback;

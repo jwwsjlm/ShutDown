@@ -31,7 +31,6 @@ std::wstring run(const std::wstring &command, DWORD *exitCode = nullptr) {
 std::wstring TaskSchedulerFallback::taskName() { return L"ShutDown_OneShot"; }
 
 bool TaskSchedulerFallback::create(std::time_t when, bool force, std::wstring *errorMessage) {
-    remove(nullptr);
     std::tm local{};
     localtime_s(&local, &when);
     wchar_t date[32]{}, time[32]{};
@@ -43,6 +42,8 @@ bool TaskSchedulerFallback::create(std::time_t when, bool force, std::wstring *e
     DWORD code = 1;
     const auto error = run(command, &code);
     if (code != 0) {
+        // /F 会在成功时原地覆盖旧任务；失败时再清理，避免旧计划继续生效。
+        remove(nullptr);
         if (errorMessage) *errorMessage = error.empty() ? L"创建系统任务失败" : error;
         return false;
     }

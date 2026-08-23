@@ -3,7 +3,7 @@ if (POLICY CMP0091)
     cmake_policy(SET CMP0091 NEW)
 endif()
 
-set(SHUTDOWN_BASE_VERSION 2.1.5)
+set(SHUTDOWN_BASE_VERSION 2.1.6)
 set(SHUTDOWN_VERSION_OVERRIDE "" CACHE STRING "Override version, normally passed by release CI from the git tag.")
 
 set(SHUTDOWN_EFFECTIVE_VERSION "${SHUTDOWN_BASE_VERSION}")
@@ -42,7 +42,6 @@ configure_file(resources/app.rc.in "${SHUTDOWN_RC_FILE}" @ONLY)
 
 set(SHUTDOWN_SOURCES
     src/main.cpp
-    src/AppLogger.cpp
     src/SettingsStore.cpp
     src/ShutdownExecutor.cpp
     src/ShutdownScheduler.cpp
@@ -58,8 +57,18 @@ set_source_files_properties("${SHUTDOWN_RC_FILE}" PROPERTIES
 )
 target_include_directories(ShutDown PRIVATE src third_party/win32xx/include)
 target_link_libraries(ShutDown PRIVATE win32xx::win32xx comctl32 shell32 advapi32 user32 gdi32 ole32 uxtheme dwmapi winhttp)
+
+# 便携版是单个静态链接程序，Release 下启用跨翻译单元优化和未使用代码回收，
+# 能减少磁盘/内存占用，也让编译器内联跨源文件的短调用路径。
+include(CheckIPOSupported)
+check_ipo_supported(RESULT SHUTDOWN_IPO_SUPPORTED OUTPUT SHUTDOWN_IPO_ERROR LANGUAGES CXX)
+if (SHUTDOWN_IPO_SUPPORTED)
+    set_property(TARGET ShutDown PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+endif()
 if(MSVC)
+    target_compile_options(ShutDown PRIVATE $<$<CONFIG:Release>:/Gy>)
     target_link_options(ShutDown PRIVATE "/MANIFEST:NO")
+    target_link_options(ShutDown PRIVATE $<$<CONFIG:Release>:/OPT:REF> $<$<CONFIG:Release>:/OPT:ICF>)
 endif()
 target_compile_definitions(ShutDown PRIVATE
     UNICODE
@@ -71,9 +80,14 @@ target_compile_definitions(ShutDown PRIVATE
     SHUTDOWN_VERSION="${PROJECT_VERSION}"
 )
 if (MINGW)
-    target_compile_options(ShutDown PRIVATE -finput-charset=UTF-8 -fexec-charset=UTF-8)
+    target_compile_options(ShutDown PRIVATE
+        -finput-charset=UTF-8
+        -fexec-charset=UTF-8
+        $<$<CONFIG:Release>:-ffunction-sections>
+        $<$<CONFIG:Release>:-fdata-sections>
+    )
     # MinGW uses a Unicode CRT entry point for wWinMain.
-    target_link_options(ShutDown PRIVATE -municode)
+    target_link_options(ShutDown PRIVATE -municode $<$<CONFIG:Release>:-Wl,--gc-sections>)
 endif()
 include(CTest)
 if (BUILD_TESTING)

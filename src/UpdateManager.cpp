@@ -3,8 +3,9 @@
 #include <windows.h>
 #include <winhttp.h>
 
+#include <atomic>
 #include <array>
-#include <sstream>
+#include <charconv>
 
 namespace {
 
@@ -38,13 +39,18 @@ std::wstring requestError(const wchar_t *action) {
 
 bool parseVersion(const std::string &value, std::array<int, 3> &parts) {
     const std::string normalized = UpdateManager::normalizeVersion(value);
-    std::istringstream stream(normalized);
-    char firstDot = 0;
-    char secondDot = 0;
-    if (!(stream >> parts[0] >> firstDot >> parts[1] >> secondDot >> parts[2])) return false;
-    stream >> std::ws;
-    return firstDot == '.' && secondDot == '.' && stream.eof() &&
-           parts[0] >= 0 && parts[1] >= 0 && parts[2] >= 0;
+    const char *current = normalized.data();
+    const char *const end = current + normalized.size();
+    for (std::size_t index = 0; index < parts.size(); ++index) {
+        const auto parsed = std::from_chars(current, end, parts[index]);
+        if (parsed.ec != std::errc{} || parsed.ptr == current || parts[index] < 0) return false;
+        current = parsed.ptr;
+        if (index + 1 < parts.size()) {
+            if (current == end || *current != '.') return false;
+            ++current;
+        }
+    }
+    return current == end;
 }
 
 bool readJsonString(const std::string &json, const std::string &name, std::string &value) {
@@ -91,19 +97,14 @@ bool readJsonArrayFirstString(const std::string &json, const std::string &name, 
     return false;
 }
 
-bool fetchJson(const wchar_t *host, const wchar_t *path, std::string &body, std::wstring &error) {
-    InternetHandle session(WinHttpOpen(L"ShutDown update checker",
-                                       WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-                                       WINHTTP_NO_PROXY_NAME,
-                                       WINHTTP_NO_PROXY_BYPASS,
-                                       0));
-    if (!session.get()) {
-        error = requestError(L"无法初始化网络请求");
+bool fetchJson(const std::atomic<bool> &cancelRequested, HINTERNET session,
+               const wchar_t *host, const wchar_t *path,
+               std::string &body, std::wstring &error) {
+    if (cancelRequested.load(std::memory_order_relaxed)) {
+        error = L"更新检查已取消";
         return false;
     }
-    WinHttpSetTimeouts(session.get(), 5000, 5000, 10000, 10000);
-
-    InternetHandle connection(WinHttpConnect(session.get(), host, INTERNET_DEFAULT_HTTPS_PORT, 0));
+    InternetHandle connection(WinHttpConnect(session, host, INTERNET_DEFAULT_HTTPS_PORT, 0));
     if (!connection.get()) {
         error = requestError(L"无法连接更新服务器");
         return false;
@@ -148,6 +149,10 @@ bool fetchJson(const wchar_t *host, const wchar_t *path, std::string &body, std:
     body.clear();
     std::array<char, 4096> buffer{};
     for (;;) {
+        if (cancelRequested.load(std::memory_order_relaxed)) {
+            error = L"更新检查已取消";
+            return false;
+        }
         DWORD bytesRead = 0;
         if (!WinHttpReadData(request.get(), buffer.data(), static_cast<DWORD>(buffer.size()), &bytesRead)) {
             error = requestError(L"无法读取更新响应");
@@ -203,12 +208,23 @@ bool parseCMakeVersion(const std::string &body, std::string &version, std::wstri
     return true;
 }
 
-bool fetchLatestVersion(std::string &version, std::wstring &error) {
+bool fetchLatestVersion(const std::atomic<bool> &cancelRequested,
+                        std::string &version, std::wstring &error) {
     std::wstring lastError = L"无法连接更新服务器";
+    InternetHandle session(WinHttpOpen(L"ShutDown update checker",
+                                       WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                       WINHTTP_NO_PROXY_NAME,
+                                       WINHTTP_NO_PROXY_BYPASS,
+                                       0));
+    if (!session.get()) {
+        error = requestError(L"无法初始化网络请求");
+        return false;
+    }
+    WinHttpSetTimeouts(session.get(), 5000, 5000, 10000, 10000);
 
     // jsDelivr 的 package 元数据直接对应 GitHub 仓库的 tags/releases，优先使用它。
     std::string body;
-    if (fetchJson(kJsDelivrDataHost, kJsDelivrDataPath, body, lastError) &&
+    if (fetchJson(cancelRequested, session.get(), kJsDelivrDataHost, kJsDelivrDataPath, body, lastError) &&
         readJsonArrayFirstString(body, "versions", version)) {
         version = UpdateManager::normalizeVersion(version);
         std::array<int, 3> parsed{};
@@ -218,16 +234,18 @@ bool fetchLatestVersion(std::string &version, std::wstring &error) {
 
     // 元数据节点不可用时，尝试多个 jsDelivr CDN 节点读取仓库版本定义。
     for (const auto *host : kJsDelivrHosts) {
+        if (cancelRequested.load(std::memory_order_relaxed)) return false;
         body.clear();
-        if (fetchJson(host, kJsDelivrVersionPath, body, lastError) &&
+        if (fetchJson(cancelRequested, session.get(), host, kJsDelivrVersionPath, body, lastError) &&
             parseCMakeVersion(body, version, lastError)) {
             return true;
         }
     }
 
     // 最后回退 GitHub Releases API，仍然读取 releases/latest，不下载任何文件。
+    if (cancelRequested.load(std::memory_order_relaxed)) return false;
     body.clear();
-    if (fetchJson(kGitHubHost, kLatestReleasePath, body, lastError) &&
+    if (fetchJson(cancelRequested, session.get(), kGitHubHost, kLatestReleasePath, body, lastError) &&
         parseLatestVersion(body, "tag_name", version, lastError)) {
         return true;
     }
@@ -241,18 +259,20 @@ bool fetchLatestVersion(std::string &version, std::wstring &error) {
 UpdateManager::UpdateManager(std::string currentVersion) : m_currentVersion(std::move(currentVersion)) {}
 UpdateManager::~UpdateManager() { stopAndJoin(); }
 
-void UpdateManager::stopAndJoin() { joinWorker(); }
+void UpdateManager::stopAndJoin() {
+    m_cancelRequested.store(true, std::memory_order_relaxed);
+    joinWorker();
+}
 
 void UpdateManager::joinWorker() {
     if (m_worker.joinable()) m_worker.join();
 }
 
 std::string UpdateManager::normalizeVersion(const std::string &value) {
-    std::string result = value;
-    while (!result.empty() && (result[0] == 'v' || result[0] == 'V')) result.erase(result.begin());
-    const auto position = result.find_first_of("-+");
-    if (position != std::string::npos) result.resize(position);
-    return result;
+    std::size_t start = 0;
+    while (start < value.size() && (value[start] == 'v' || value[start] == 'V')) ++start;
+    const auto end = value.find_first_of("-+", start);
+    return value.substr(start, end == std::string::npos ? std::string::npos : end - start);
 }
 
 bool UpdateManager::isNewerVersion(const std::string &candidate, const std::string &current) {
@@ -263,18 +283,24 @@ bool UpdateManager::isNewerVersion(const std::string &candidate, const std::stri
 }
 
 void UpdateManager::checkForUpdates() {
+    m_cancelRequested.store(true, std::memory_order_relaxed);
     joinWorker();
-    m_worker = std::thread([this] {
+    m_cancelRequested.store(false, std::memory_order_relaxed);
+    const auto currentVersion = m_currentVersion;
+    const auto callbacks = m_callbacks;
+    const auto *cancelRequested = &m_cancelRequested;
+    m_worker = std::thread([currentVersion, callbacks, cancelRequested] {
         std::string latestVersion;
         std::wstring error;
-        if (!fetchLatestVersion(latestVersion, error)) {
-            if (m_callbacks.checkError) m_callbacks.checkError(error);
+        if (!fetchLatestVersion(*cancelRequested, latestVersion, error)) {
+            if (!cancelRequested->load(std::memory_order_relaxed) && callbacks.checkError) callbacks.checkError(error);
             return;
         }
-        if (isNewerVersion(latestVersion, m_currentVersion)) {
-            if (m_callbacks.updateAvailable) m_callbacks.updateAvailable(latestVersion);
-        } else if (m_callbacks.noUpdateAvailable) {
-            m_callbacks.noUpdateAvailable();
+        if (cancelRequested->load(std::memory_order_relaxed)) return;
+        if (UpdateManager::isNewerVersion(latestVersion, currentVersion)) {
+            if (callbacks.updateAvailable) callbacks.updateAvailable(latestVersion);
+        } else if (callbacks.noUpdateAvailable) {
+            callbacks.noUpdateAvailable();
         }
     });
 }

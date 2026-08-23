@@ -1,4 +1,3 @@
-#include "AppLogger.h"
 #include "MainWindow.h"
 
 #include <windows.h>
@@ -14,7 +13,6 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     ShutdownApp app;
     INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_STANDARD_CLASSES | ICC_TAB_CLASSES};
     InitCommonControlsEx(&controls);
-    AppLogger::initialize();
     const auto mutex = CreateMutexW(nullptr, TRUE, L"Local\\ShutDown.SingleInstance");
     if (!mutex) {
         MessageBoxW(nullptr, L"无法创建程序互斥锁。", L"定时关机", MB_OK | MB_ICONERROR);

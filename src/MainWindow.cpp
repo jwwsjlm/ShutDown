@@ -1,7 +1,7 @@
 #include "MainWindow.h"
 
-#include "AppLogger.h"
 #include "SettingsStore.h"
+#include "SchedulerTimerPolicy.h"
 #include "ShutdownExecutor.h"
 #include "../resources/resource.h"
 
@@ -178,7 +178,7 @@ int MainWindow::OnCreate(CREATESTRUCT &) {
     if (m_dpi <= 0) m_dpi = USER_DEFAULT_SCREEN_DPI;
     createControls(); applyTheme(); resizeToContent();
     createTray(); restorePersistedTask();
-    ::SetTimer(GetHwnd(), TIMER_SCHEDULER, 1000, nullptr);
+    refreshSchedulerTimer();
     return 0;
 }
 
@@ -258,6 +258,8 @@ void MainWindow::recreateControlsForDpi(int dpi) {
 }
 
 void MainWindow::createControls() {
+    m_hasDisplayedState = false;
+    m_lastRemainingText.clear();
     if (m_font) { ::DeleteObject(m_font); m_font = nullptr; }
     if (m_fontLarge) { ::DeleteObject(m_fontLarge); m_fontLarge = nullptr; }
     if (m_linkFont) { ::DeleteObject(m_linkFont); m_linkFont = nullptr; }
@@ -341,15 +343,17 @@ void MainWindow::setSettingsVisible(bool visible) {
 void MainWindow::createTray() {
     m_tray = NOTIFYICONDATAW{}; m_tray.cbSize = sizeof(NOTIFYICONDATAW); m_tray.hWnd = GetHwnd(); m_tray.uID = 1; m_tray.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP; m_tray.uCallbackMessage = WM_TRAY; m_tray.hIcon = loadAppIcon(16); wcscpy_s(m_tray.szTip, L"定时关机");
     m_trayCreated = Shell_NotifyIconW(NIM_ADD, &m_tray) == TRUE;
+    m_lastTrayTip = m_trayCreated ? L"定时关机" : L"";
     updateTrayTip();
 }
 
-void MainWindow::destroyTray() { if (m_trayCreated) Shell_NotifyIconW(NIM_DELETE, &m_tray); m_trayCreated = false; }
+void MainWindow::destroyTray() { if (m_trayCreated) Shell_NotifyIconW(NIM_DELETE, &m_tray); m_trayCreated = false; m_lastTrayTip.clear(); }
 
 void MainWindow::restorePersistedTask() {
-    if (!SettingsStore::hasTask()) return;
+    const auto task = SettingsStore::loadTask();
+    if (task.type == PersistedTask::Type::None) return;
     if (::MessageBoxW(GetHwnd(), L"检测到上次未完成的关机任务，是否恢复？", L"恢复任务", MB_YESNO | MB_ICONQUESTION) == IDYES) {
-        std::wstring error; if (!m_scheduler.restore(SettingsStore::loadTask(), &error) && !error.empty()) ::MessageBoxW(GetHwnd(), error.c_str(), L"恢复失败", MB_OK | MB_ICONWARNING);
+        std::wstring error; if (!m_scheduler.restore(task, &error) && !error.empty()) ::MessageBoxW(GetHwnd(), error.c_str(), L"恢复失败", MB_OK | MB_ICONWARNING);
     } else SettingsStore::clearTask();
 }
 
@@ -412,12 +416,38 @@ std::wstring MainWindow::formatDuration(std::int64_t seconds) {
     wchar_t buffer[64]{}; swprintf_s(buffer, 64, L"%02lld:%02lld:%02lld", seconds / 3600, (seconds / 60) % 60, seconds % 60); return buffer;
 }
 
-void MainWindow::updateRemaining(std::int64_t seconds) { setText(m_remaining, seconds > 0 ? formatDuration(seconds) : L"--"); updateTrayTip(); }
+void MainWindow::updateRemaining(std::int64_t seconds) {
+    const std::wstring value = seconds > 0 ? formatDuration(seconds) : L"--";
+    if (value != m_lastRemainingText) {
+        setText(m_remaining, value);
+        m_lastRemainingText = value;
+    }
+    // 窗口可见时主界面已经显示精确倒计时，无需每秒通过 Shell IPC 刷新托盘提示。
+    if (!::IsWindowVisible(GetHwnd())) updateTrayTip();
+}
 
 void MainWindow::updateState(ShutdownScheduler::State state) {
-    const wchar_t *label = L"空闲"; if (state == ShutdownScheduler::State::Armed) label = L"已设置"; else if (state == ShutdownScheduler::State::Paused) label = L"已暂停"; else if (state == ShutdownScheduler::State::Executing) label = L"正在关机"; else if (state == ShutdownScheduler::State::Completed) label = L"已完成"; else if (state == ShutdownScheduler::State::Error) label = L"失败";
-    setText(m_status, label); ::EnableWindow(m_pause, m_scheduler.isActive()); setText(m_pause, state == ShutdownScheduler::State::Paused ? L"继续" : L"暂停");
+    if (!m_hasDisplayedState || state != m_displayedState) {
+        const wchar_t *label = L"空闲"; if (state == ShutdownScheduler::State::Armed) label = L"已设置"; else if (state == ShutdownScheduler::State::Paused) label = L"已暂停"; else if (state == ShutdownScheduler::State::Executing) label = L"正在关机"; else if (state == ShutdownScheduler::State::Completed) label = L"已完成"; else if (state == ShutdownScheduler::State::Error) label = L"失败";
+        setText(m_status, label); ::EnableWindow(m_pause, m_scheduler.isActive()); setText(m_pause, state == ShutdownScheduler::State::Paused ? L"继续" : L"暂停");
+        m_displayedState = state;
+        m_hasDisplayedState = true;
+    }
+    refreshSchedulerTimer();
     updateTrayTip();
+}
+
+void MainWindow::refreshSchedulerTimer() {
+    if (!GetHwnd()) return;
+
+    const UINT interval = SchedulerTimerPolicy::intervalMs(
+        m_scheduler.state(), m_scheduler.remainingSeconds(), ::IsWindowVisible(GetHwnd()) != FALSE);
+    if (interval == m_schedulerTimerInterval) return;
+
+    if (m_schedulerTimerInterval != 0) ::KillTimer(GetHwnd(), TIMER_SCHEDULER);
+    m_schedulerTimerInterval = 0;
+    if (interval != 0 && ::SetTimer(GetHwnd(), TIMER_SCHEDULER, interval, nullptr) != 0)
+        m_schedulerTimerInterval = interval;
 }
 
 std::wstring MainWindow::currentCountdownText() const {
@@ -429,13 +459,37 @@ std::wstring MainWindow::currentCountdownText() const {
 
 void MainWindow::updateTrayTip() {
     if (!m_trayCreated) return;
-    const std::wstring tip = m_scheduler.isActive() ? (L"定时关机 - " + currentCountdownText()) : L"定时关机";
+    std::wstring tip = L"定时关机";
+    if (m_scheduler.state() == ShutdownScheduler::State::Paused) {
+        tip += L" - 已暂停: " + formatDuration(m_scheduler.remainingSeconds());
+    } else if (m_scheduler.state() == ShutdownScheduler::State::Armed) {
+        const auto remaining = m_scheduler.remainingSeconds();
+        if (::IsWindowVisible(GetHwnd())) {
+            tip += L" - 倒计时运行中";
+        } else if (remaining > 60) {
+            const auto totalMinutes = (remaining + 59) / 60;
+            const auto hours = totalMinutes / 60;
+            const auto minutes = totalMinutes % 60;
+            tip += L" - 约 ";
+            if (hours > 0) tip += std::to_wstring(hours) + L" 小时 ";
+            tip += std::to_wstring(minutes) + L" 分钟";
+        } else {
+            tip += L" - 倒计时: " + formatDuration(remaining);
+        }
+    }
+    if (tip == m_lastTrayTip) return;
     wcscpy_s(m_tray.szTip, tip.c_str());
     m_tray.uFlags = NIF_TIP;
-    Shell_NotifyIconW(NIM_MODIFY, &m_tray);
+    if (Shell_NotifyIconW(NIM_MODIFY, &m_tray)) m_lastTrayTip = tip;
 }
 
-void MainWindow::showFromTray() { ::ShowWindow(GetHwnd(), SW_SHOWNORMAL); ::SetForegroundWindow(GetHwnd()); }
+void MainWindow::showFromTray() {
+    ::ShowWindow(GetHwnd(), SW_SHOWNORMAL);
+    updateRemaining(m_scheduler.remainingSeconds());
+    refreshSchedulerTimer();
+    updateTrayTip();
+    ::SetForegroundWindow(GetHwnd());
+}
 
 void MainWindow::post(UiEvent *event) { if (!PostMessageW(GetHwnd(), WM_UI_EVENT, 0, reinterpret_cast<LPARAM>(event))) delete event; }
 
@@ -479,7 +533,8 @@ bool MainWindow::askCloseWithActiveTask() {
 void MainWindow::OnClose() { if (!m_forceQuit && m_scheduler.isActive() && !askCloseWithActiveTask()) return; DestroyWindow(GetHwnd()); }
 void MainWindow::OnDestroy() {
     m_updateCheckInProgress = false;
-    ::KillTimer(GetHwnd(), TIMER_SCHEDULER);
+    if (m_schedulerTimerInterval != 0) ::KillTimer(GetHwnd(), TIMER_SCHEDULER);
+    m_schedulerTimerInterval = 0;
     m_updateManager.stopAndJoin();
     MSG message{};
     while (::PeekMessageW(&message, GetHwnd(), WM_UI_EVENT, WM_UI_EVENT, PM_REMOVE)) {
@@ -490,8 +545,8 @@ void MainWindow::OnDestroy() {
 }
 
 LRESULT MainWindow::WndProc(UINT msg, WPARAM wparam, LPARAM lparam) {
-    if (msg == WM_TIMER) { if (wparam == TIMER_SCHEDULER) m_scheduler.tick(); return 0; }
-    if (msg == WM_SIZE && wparam == SIZE_MINIMIZED) { ::ShowWindow(GetHwnd(), SW_HIDE); return 0; }
+    if (msg == WM_TIMER) { if (wparam == TIMER_SCHEDULER) { m_scheduler.tick(); refreshSchedulerTimer(); } return 0; }
+    if (msg == WM_SIZE && wparam == SIZE_MINIMIZED) { ::ShowWindow(GetHwnd(), SW_HIDE); refreshSchedulerTimer(); updateTrayTip(); return 0; }
     if (msg == WM_NOTIFY) {
         auto *notify = reinterpret_cast<NMHDR *>(lparam);
         if (notify && (notify->hwndFrom == m_tab || static_cast<int>(notify->idFrom) == IDC_TAB)) {

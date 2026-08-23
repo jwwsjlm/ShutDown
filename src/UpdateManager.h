@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <functional>
 #include <string>
 #include <thread>
@@ -28,5 +29,6 @@ private:
 
     std::string m_currentVersion;
     Callbacks m_callbacks;
+    std::atomic<bool> m_cancelRequested{false};
     std::thread m_worker;
 };

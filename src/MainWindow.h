@@ -54,6 +54,7 @@ private:
     void handleEvent(std::unique_ptr<UiEvent> event);
     void updateState(ShutdownScheduler::State state);
     void updateRemaining(std::int64_t seconds);
+    void refreshSchedulerTimer();
     bool askCloseWithActiveTask();
     void showFromTray();
     void setSettingsVisible(bool visible);
@@ -76,6 +77,11 @@ private:
     bool m_trayCreated = false;
     bool m_forceQuit = false;
     bool m_updateCheckInProgress = false;
+    UINT m_schedulerTimerInterval = 0;
+    bool m_hasDisplayedState = false;
+    ShutdownScheduler::State m_displayedState = ShutdownScheduler::State::Idle;
+    std::wstring m_lastRemainingText;
+    std::wstring m_lastTrayTip;
     HWND m_dateEdit = nullptr;
     HWND m_timeEdit = nullptr;
     HWND m_hours = nullptr;

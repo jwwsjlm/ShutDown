@@ -1,5 +1,4 @@
 #include "SettingsStore.h"
-#include "SchedulerTimerPolicy.h"
 #include "ShutdownScheduler.h"
 
 #include <windows.h>
@@ -36,16 +35,6 @@ int main() {
     if (loaded.remainingSeconds != original.remainingSeconds || !loaded.force || !loaded.taskSchedulerFallback || !loaded.paused) fail("task flags round-trip");
     SettingsStore::clearTask();
     if (SettingsStore::hasTask()) fail("clear task");
-    if (SchedulerTimerPolicy::intervalMs(ShutdownScheduler::State::Idle, 3600, false) != 0)
-        fail("idle scheduler must not run a timer");
-    if (SchedulerTimerPolicy::intervalMs(ShutdownScheduler::State::Paused, 3600, false) != 0)
-        fail("paused scheduler must not run a timer");
-    if (SchedulerTimerPolicy::intervalMs(ShutdownScheduler::State::Armed, 3600, true) != 1000)
-        fail("visible countdown must refresh every second");
-    if (SchedulerTimerPolicy::intervalMs(ShutdownScheduler::State::Armed, 3600, false) != 60000)
-        fail("hidden long countdown must use a low-frequency timer");
-    if (SchedulerTimerPolicy::intervalMs(ShutdownScheduler::State::Armed, 60, false) != 1000)
-        fail("hidden countdown must regain one-second precision near shutdown");
     ShutdownScheduler scheduler;
     std::wstring error;
     int remainingNotifications = 0;

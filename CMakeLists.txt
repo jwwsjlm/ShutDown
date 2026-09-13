@@ -3,7 +3,7 @@ if (POLICY CMP0091)
     cmake_policy(SET CMP0091 NEW)
 endif()
 
-set(SHUTDOWN_BASE_VERSION 2.1.6)
+set(SHUTDOWN_BASE_VERSION 2.1.7)
 set(SHUTDOWN_VERSION_OVERRIDE "" CACHE STRING "Override version, normally passed by release CI from the git tag.")
 
 set(SHUTDOWN_EFFECTIVE_VERSION "${SHUTDOWN_BASE_VERSION}")

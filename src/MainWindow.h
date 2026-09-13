@@ -6,7 +6,10 @@
 #include "wxx_wincore.h"
 
 #include <memory>
+#include <condition_variable>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 class MainWindow final : public Win32xx::CWnd {
@@ -27,10 +30,19 @@ protected:
 
 private:
     struct UiEvent {
-        enum class Type { UpdateAvailable, NoUpdate, CheckError };
+        enum class Type {
+            UpdateAvailable,
+            NoUpdate,
+            CheckError,
+            SchedulerState,
+            SchedulerRemaining,
+            SchedulerError,
+        };
         Type type;
         std::string version;
         std::wstring text;
+        ShutdownScheduler::State schedulerState = ShutdownScheduler::State::Idle;
+        std::int64_t remainingSeconds = 0;
     };
 
     void createControls();
@@ -54,7 +66,10 @@ private:
     void handleEvent(std::unique_ptr<UiEvent> event);
     void updateState(ShutdownScheduler::State state);
     void updateRemaining(std::int64_t seconds);
-    void refreshSchedulerTimer();
+    void startSchedulerWorker();
+    void stopSchedulerWorker();
+    void wakeSchedulerWorker();
+    void schedulerWorkerLoop();
     bool askCloseWithActiveTask();
     void showFromTray();
     void setSettingsVisible(bool visible);
@@ -77,7 +92,7 @@ private:
     bool m_trayCreated = false;
     bool m_forceQuit = false;
     bool m_updateCheckInProgress = false;
-    UINT m_schedulerTimerInterval = 0;
+    bool m_settingsVisible = false;
     bool m_hasDisplayedState = false;
     ShutdownScheduler::State m_displayedState = ShutdownScheduler::State::Idle;
     std::wstring m_lastRemainingText;
@@ -98,4 +113,9 @@ private:
     HWND m_settingsGroup = nullptr;
     std::vector<HWND> m_mainControls;
     std::vector<HWND> m_settingsControls;
+    mutable std::mutex m_schedulerMutex;
+    std::mutex m_schedulerWorkerMutex;
+    std::condition_variable m_schedulerWorkerCv;
+    std::thread m_schedulerWorker;
+    bool m_schedulerWorkerStop = false;
 };

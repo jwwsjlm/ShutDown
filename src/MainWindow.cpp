@@ -1,7 +1,6 @@
 #include "MainWindow.h"
 
 #include "SettingsStore.h"
-#include "SchedulerTimerPolicy.h"
 #include "ShutdownExecutor.h"
 #include "../resources/resource.h"
 
@@ -11,6 +10,7 @@
 #include <uxtheme.h>
 #include <windows.h>
 
+#include <algorithm>
 #include <chrono>
 #include <ctime>
 #include <memory>
@@ -31,7 +31,6 @@ enum : int {
 };
 constexpr UINT WM_TRAY = WM_APP + 10;
 constexpr UINT WM_UI_EVENT = WM_APP + 11;
-constexpr UINT TIMER_SCHEDULER = 1;
 constexpr wchar_t kProjectUrl[] = L"https://github.com/jwwsjlm/ShutDown";
 constexpr wchar_t kLatestReleaseUrl[] = L"https://github.com/jwwsjlm/ShutDown/releases/latest";
 // Win10 1903 之前头文件里没有这个枚举值，直接写字面量，旧系统上调用只会返回错误码。
@@ -65,7 +64,9 @@ HICON loadAppIcon(int size) {
 
 void repaintWindow(HWND hwnd) {
     if (!hwnd) return;
-    ::RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ERASENOW | RDW_ALLCHILDREN | RDW_UPDATENOW);
+    // 只标记需要重绘，避免 RDW_ERASENOW/RDW_UPDATENOW 在切页时同步递归
+    // 触发所有子控件绘制，造成消息重入和控件残影/重叠。
+    ::RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
 }
 
 std::wstring utf8ToWide(const std::string &value) {
@@ -125,9 +126,24 @@ void setPickerDateTime(HWND datePicker, HWND timeEdit, std::time_t target) {
 
 MainWindow::MainWindow(std::string version)
     : m_updateManager(version), m_windowTitle(L"定时关机 v" + utf8ToWide(version)) {
-    m_scheduler.setStateCallback([this](ShutdownScheduler::State state) { updateState(state); });
-    m_scheduler.setRemainingCallback([this](std::int64_t seconds) { updateRemaining(seconds); });
-    m_scheduler.setErrorCallback([this](const std::wstring &message) { ::MessageBoxW(GetHwnd(), message.c_str(), L"关机失败", MB_ICONERROR); });
+    m_scheduler.setStateCallback([this](ShutdownScheduler::State state) {
+        auto *event = new UiEvent{};
+        event->type = UiEvent::Type::SchedulerState;
+        event->schedulerState = state;
+        post(event);
+    });
+    m_scheduler.setRemainingCallback([this](std::int64_t seconds) {
+        auto *event = new UiEvent{};
+        event->type = UiEvent::Type::SchedulerRemaining;
+        event->remainingSeconds = seconds;
+        post(event);
+    });
+    m_scheduler.setErrorCallback([this](const std::wstring &message) {
+        auto *event = new UiEvent{};
+        event->type = UiEvent::Type::SchedulerError;
+        event->text = message;
+        post(event);
+    });
     UpdateManager::Callbacks callbacks;
     callbacks.updateAvailable = [this](const std::string &version) { auto *event = new UiEvent{}; event->type = UiEvent::Type::UpdateAvailable; event->version = version; post(event); };
     callbacks.noUpdateAvailable = [this] { auto *event = new UiEvent{}; event->type = UiEvent::Type::NoUpdate; post(event); };
@@ -136,6 +152,7 @@ MainWindow::MainWindow(std::string version)
 }
 
 MainWindow::~MainWindow() {
+    stopSchedulerWorker();
     destroyTray();
     if (m_font) DeleteObject(m_font);
     if (m_fontLarge) DeleteObject(m_fontLarge);
@@ -178,7 +195,7 @@ int MainWindow::OnCreate(CREATESTRUCT &) {
     if (m_dpi <= 0) m_dpi = USER_DEFAULT_SCREEN_DPI;
     createControls(); applyTheme(); resizeToContent();
     createTray(); restorePersistedTask();
-    refreshSchedulerTimer();
+    startSchedulerWorker();
     return 0;
 }
 
@@ -248,8 +265,15 @@ void MainWindow::recreateControlsForDpi(int dpi) {
     SendMessageW(m_minutes, EM_SETSEL, minutesStart, minutesEnd);
     SendMessageW(m_seconds, EM_SETSEL, secondsStart, secondsEnd);
     if (pickedTarget > 0) setPickerDateTime(m_dateEdit, m_timeEdit, pickedTarget);
-    updateState(m_scheduler.state());
-    updateRemaining(m_scheduler.remainingSeconds());
+    ShutdownScheduler::State state;
+    std::int64_t remaining = 0;
+    {
+        std::lock_guard<std::mutex> lock(m_schedulerMutex);
+        state = m_scheduler.state();
+        remaining = m_scheduler.remainingSeconds();
+    }
+    updateState(state);
+    updateRemaining(remaining);
     refreshUpdateButton();
     if (focusId != 0) {
         HWND restoredFocus = ::GetDlgItem(GetHwnd(), focusId);
@@ -260,6 +284,7 @@ void MainWindow::recreateControlsForDpi(int dpi) {
 void MainWindow::createControls() {
     m_hasDisplayedState = false;
     m_lastRemainingText.clear();
+    m_settingsVisible = false;
     if (m_font) { ::DeleteObject(m_font); m_font = nullptr; }
     if (m_fontLarge) { ::DeleteObject(m_fontLarge); m_fontLarge = nullptr; }
     if (m_linkFont) { ::DeleteObject(m_linkFont); m_linkFont = nullptr; }
@@ -333,10 +358,12 @@ void MainWindow::createControls() {
 }
 
 void MainWindow::setSettingsVisible(bool visible) {
+    if (m_settingsVisible == visible) return;
+    m_settingsVisible = visible;
     if (m_tab) TabCtrl_SetCurSel(m_tab, visible ? 1 : 0);
     for (HWND hwnd : m_mainControls) if (hwnd) ::ShowWindow(hwnd, visible ? SW_HIDE : SW_SHOW);
     for (HWND hwnd : m_settingsControls) if (hwnd) ::ShowWindow(hwnd, visible ? SW_SHOW : SW_HIDE);
-    // 切换页面时部分 Win32 子控件会留下旧文字/边框残影，强制擦除并同步重绘父窗口和所有子控件。
+    // 切页只提交一次异步重绘，避免同步递归刷新导致控件重叠。
     repaintWindow(GetHwnd());
 }
 
@@ -353,7 +380,14 @@ void MainWindow::restorePersistedTask() {
     const auto task = SettingsStore::loadTask();
     if (task.type == PersistedTask::Type::None) return;
     if (::MessageBoxW(GetHwnd(), L"检测到上次未完成的关机任务，是否恢复？", L"恢复任务", MB_YESNO | MB_ICONQUESTION) == IDYES) {
-        std::wstring error; if (!m_scheduler.restore(task, &error) && !error.empty()) ::MessageBoxW(GetHwnd(), error.c_str(), L"恢复失败", MB_OK | MB_ICONWARNING);
+        std::wstring error;
+        bool restored = false;
+        {
+            std::lock_guard<std::mutex> lock(m_schedulerMutex);
+            restored = m_scheduler.restore(task, &error);
+        }
+        if (restored) wakeSchedulerWorker();
+        if (!restored && !error.empty()) ::MessageBoxW(GetHwnd(), error.c_str(), L"恢复失败", MB_OK | MB_ICONWARNING);
     } else SettingsStore::clearTask();
 }
 
@@ -363,7 +397,13 @@ std::wstring MainWindow::text(HWND controlHandle) const { wchar_t buffer[512]{};
 void MainWindow::scheduleAt() {
     std::wstring error;
     const auto target = pickerDateTime(m_dateEdit, m_timeEdit);
-    if (!m_scheduler.scheduleAt(target, isChecked(m_force), isChecked(m_fallback), &error)) ::MessageBoxW(GetHwnd(), error.c_str(), L"设置失败", MB_OK | MB_ICONWARNING);
+    bool scheduled = false;
+    {
+        std::lock_guard<std::mutex> lock(m_schedulerMutex);
+        scheduled = m_scheduler.scheduleAt(target, isChecked(m_force), isChecked(m_fallback), &error);
+    }
+    wakeSchedulerWorker();
+    if (!scheduled) ::MessageBoxW(GetHwnd(), error.c_str(), L"设置失败", MB_OK | MB_ICONWARNING);
 }
 
 void MainWindow::scheduleCountdown() {
@@ -382,7 +422,13 @@ void MainWindow::scheduleCountdown() {
         if (answer != IDYES) return;
     }
     std::wstring error;
-    if (!m_scheduler.scheduleCountdown(seconds, isChecked(m_force), isChecked(m_fallback), &error)) {
+    bool scheduled = false;
+    {
+        std::lock_guard<std::mutex> lock(m_schedulerMutex);
+        scheduled = m_scheduler.scheduleCountdown(seconds, isChecked(m_force), isChecked(m_fallback), &error);
+    }
+    wakeSchedulerWorker();
+    if (!scheduled) {
         ::MessageBoxW(GetHwnd(), error.c_str(), L"设置失败", MB_OK | MB_ICONWARNING);
         return;
     }
@@ -391,12 +437,32 @@ void MainWindow::scheduleCountdown() {
     setPickerDateTime(m_dateEdit, m_timeEdit, target);
 }
 
-void MainWindow::cancelTask() { m_scheduler.cancel(); }
-void MainWindow::togglePause() { m_scheduler.state() == ShutdownScheduler::State::Paused ? m_scheduler.resume() : m_scheduler.pause(); }
+void MainWindow::cancelTask() {
+    {
+        std::lock_guard<std::mutex> lock(m_schedulerMutex);
+        m_scheduler.cancel();
+    }
+    wakeSchedulerWorker();
+}
+
+void MainWindow::togglePause() {
+    {
+        std::lock_guard<std::mutex> lock(m_schedulerMutex);
+        if (m_scheduler.state() == ShutdownScheduler::State::Paused) m_scheduler.resume();
+        else m_scheduler.pause();
+    }
+    wakeSchedulerWorker();
+}
 
 void MainWindow::executeNow() {
     if (::MessageBoxW(GetHwnd(), L"立即关机？", L"确认关机", MB_YESNO | MB_ICONWARNING) != IDYES) return;
-    m_scheduler.cancel(); std::wstring error; if (!ShutdownExecutor::execute(isChecked(m_force), &error)) ::MessageBoxW(GetHwnd(), error.c_str(), L"关机失败", MB_OK | MB_ICONERROR);
+    {
+        std::lock_guard<std::mutex> lock(m_schedulerMutex);
+        m_scheduler.cancel();
+    }
+    wakeSchedulerWorker();
+    std::wstring error;
+    if (!ShutdownExecutor::execute(isChecked(m_force), &error)) ::MessageBoxW(GetHwnd(), error.c_str(), L"关机失败", MB_OK | MB_ICONERROR);
 }
 
 void MainWindow::checkForUpdates() {
@@ -422,48 +488,109 @@ void MainWindow::updateRemaining(std::int64_t seconds) {
         setText(m_remaining, value);
         m_lastRemainingText = value;
     }
-    // 窗口可见时主界面已经显示精确倒计时，无需每秒通过 Shell IPC 刷新托盘提示。
+    // 托盘只在状态变化、用户显示窗口或用户打开托盘菜单时更新，不再由界面定时轮询。
     if (!::IsWindowVisible(GetHwnd())) updateTrayTip();
 }
 
 void MainWindow::updateState(ShutdownScheduler::State state) {
     if (!m_hasDisplayedState || state != m_displayedState) {
         const wchar_t *label = L"空闲"; if (state == ShutdownScheduler::State::Armed) label = L"已设置"; else if (state == ShutdownScheduler::State::Paused) label = L"已暂停"; else if (state == ShutdownScheduler::State::Executing) label = L"正在关机"; else if (state == ShutdownScheduler::State::Completed) label = L"已完成"; else if (state == ShutdownScheduler::State::Error) label = L"失败";
-        setText(m_status, label); ::EnableWindow(m_pause, m_scheduler.isActive()); setText(m_pause, state == ShutdownScheduler::State::Paused ? L"继续" : L"暂停");
+        const bool active = state == ShutdownScheduler::State::Armed || state == ShutdownScheduler::State::Paused;
+        setText(m_status, label); ::EnableWindow(m_pause, active); setText(m_pause, state == ShutdownScheduler::State::Paused ? L"继续" : L"暂停");
         m_displayedState = state;
         m_hasDisplayedState = true;
     }
-    refreshSchedulerTimer();
     updateTrayTip();
 }
 
-void MainWindow::refreshSchedulerTimer() {
-    if (!GetHwnd()) return;
+void MainWindow::startSchedulerWorker() {
+    std::lock_guard<std::mutex> lock(m_schedulerWorkerMutex);
+    if (m_schedulerWorker.joinable()) return;
+    m_schedulerWorkerStop = false;
+    m_schedulerWorker = std::thread(&MainWindow::schedulerWorkerLoop, this);
+}
 
-    const UINT interval = SchedulerTimerPolicy::intervalMs(
-        m_scheduler.state(), m_scheduler.remainingSeconds(), ::IsWindowVisible(GetHwnd()) != FALSE);
-    if (interval == m_schedulerTimerInterval) return;
+void MainWindow::stopSchedulerWorker() {
+    {
+        std::lock_guard<std::mutex> lock(m_schedulerWorkerMutex);
+        m_schedulerWorkerStop = true;
+    }
+    m_schedulerWorkerCv.notify_all();
+    if (m_schedulerWorker.joinable()) m_schedulerWorker.join();
+}
 
-    if (m_schedulerTimerInterval != 0) ::KillTimer(GetHwnd(), TIMER_SCHEDULER);
-    m_schedulerTimerInterval = 0;
-    if (interval != 0 && ::SetTimer(GetHwnd(), TIMER_SCHEDULER, interval, nullptr) != 0)
-        m_schedulerTimerInterval = interval;
+void MainWindow::wakeSchedulerWorker() {
+    m_schedulerWorkerCv.notify_all();
+}
+
+void MainWindow::schedulerWorkerLoop() {
+    std::unique_lock<std::mutex> waitLock(m_schedulerWorkerMutex);
+    while (!m_schedulerWorkerStop) {
+        ShutdownScheduler::State state = ShutdownScheduler::State::Idle;
+        std::int64_t remaining = 0;
+        {
+            std::lock_guard<std::mutex> schedulerLock(m_schedulerMutex);
+            state = m_scheduler.state();
+            if (state == ShutdownScheduler::State::Armed) remaining = m_scheduler.remainingSeconds();
+        }
+
+        if (state != ShutdownScheduler::State::Armed) {
+            // 没有活动倒计时时不轮询，只有设置/暂停/继续/取消或销毁窗口时被唤醒。
+            m_schedulerWorkerCv.wait(waitLock);
+            continue;
+        }
+
+        if (remaining <= 0) {
+            // 到点执行关机。销毁流程会等待这次执行完成后再 join worker，
+            // 因而不会在 ShutdownExecutor 使用期间销毁窗口对象。
+            {
+                std::lock_guard<std::mutex> schedulerLock(m_schedulerMutex);
+                m_scheduler.tick();
+            }
+            continue;
+        }
+
+        // 不使用 HWND/WM_TIMER。后台线程每秒只计算一次剩余值并发送一个
+        // 目标控件更新，不触发窗口布局或全窗口重绘；设置、暂停、继续、取消
+        // 会通过 condition_variable 立即打断等待并重新读取任务状态。
+        const auto waitSeconds = std::min<std::int64_t>(remaining, 1);
+        if (m_schedulerWorkerCv.wait_for(waitLock, std::chrono::seconds(waitSeconds)) == std::cv_status::no_timeout)
+            continue;
+        {
+            std::lock_guard<std::mutex> schedulerLock(m_schedulerMutex);
+            m_scheduler.tick();
+        }
+    }
 }
 
 std::wstring MainWindow::currentCountdownText() const {
-    if (!m_scheduler.isActive()) return L"无活动任务";
-    const auto remaining = m_scheduler.remainingSeconds();
-    const std::wstring prefix = m_scheduler.state() == ShutdownScheduler::State::Paused ? L"已暂停: " : L"倒计时: ";
+    ShutdownScheduler::State state;
+    std::int64_t remaining = 0;
+    {
+        std::lock_guard<std::mutex> lock(m_schedulerMutex);
+        state = m_scheduler.state();
+        if (state == ShutdownScheduler::State::Armed || state == ShutdownScheduler::State::Paused)
+            remaining = m_scheduler.remainingSeconds();
+    }
+    if (state != ShutdownScheduler::State::Armed && state != ShutdownScheduler::State::Paused) return L"无活动任务";
+    const std::wstring prefix = state == ShutdownScheduler::State::Paused ? L"已暂停: " : L"倒计时: ";
     return prefix + formatDuration(remaining);
 }
 
 void MainWindow::updateTrayTip() {
     if (!m_trayCreated) return;
+    ShutdownScheduler::State state;
+    std::int64_t remaining = 0;
+    {
+        std::lock_guard<std::mutex> lock(m_schedulerMutex);
+        state = m_scheduler.state();
+        if (state == ShutdownScheduler::State::Armed || state == ShutdownScheduler::State::Paused)
+            remaining = m_scheduler.remainingSeconds();
+    }
     std::wstring tip = L"定时关机";
-    if (m_scheduler.state() == ShutdownScheduler::State::Paused) {
-        tip += L" - 已暂停: " + formatDuration(m_scheduler.remainingSeconds());
-    } else if (m_scheduler.state() == ShutdownScheduler::State::Armed) {
-        const auto remaining = m_scheduler.remainingSeconds();
+    if (state == ShutdownScheduler::State::Paused) {
+        tip += L" - 已暂停: " + formatDuration(remaining);
+    } else if (state == ShutdownScheduler::State::Armed) {
         if (::IsWindowVisible(GetHwnd())) {
             tip += L" - 倒计时运行中";
         } else if (remaining > 60) {
@@ -485,8 +612,12 @@ void MainWindow::updateTrayTip() {
 
 void MainWindow::showFromTray() {
     ::ShowWindow(GetHwnd(), SW_SHOWNORMAL);
-    updateRemaining(m_scheduler.remainingSeconds());
-    refreshSchedulerTimer();
+    std::int64_t remaining = 0;
+    {
+        std::lock_guard<std::mutex> lock(m_schedulerMutex);
+        remaining = m_scheduler.remainingSeconds();
+    }
+    updateRemaining(remaining);
     updateTrayTip();
     ::SetForegroundWindow(GetHwnd());
 }
@@ -494,14 +625,44 @@ void MainWindow::showFromTray() {
 void MainWindow::post(UiEvent *event) { if (!PostMessageW(GetHwnd(), WM_UI_EVENT, 0, reinterpret_cast<LPARAM>(event))) delete event; }
 
 void MainWindow::handleEvent(std::unique_ptr<UiEvent> event) {
-    m_updateCheckInProgress = false;
-    refreshUpdateButton();
     switch (event->type) {
     case UiEvent::Type::UpdateAvailable:
+        m_updateCheckInProgress = false;
+        refreshUpdateButton();
         if (::MessageBoxW(GetHwnd(), updatePromptText(event->version).c_str(), L"发现新版本", MB_YESNO | MB_ICONINFORMATION) == IDYES) openUrl(GetHwnd(), kLatestReleaseUrl);
         break;
-    case UiEvent::Type::NoUpdate: ::MessageBoxW(GetHwnd(), L"当前已经是最新版本。", L"检查更新", MB_OK | MB_ICONINFORMATION); break;
-    case UiEvent::Type::CheckError: ::MessageBoxW(GetHwnd(), event->text.c_str(), L"检查更新失败", MB_OK | MB_ICONWARNING); break;
+    case UiEvent::Type::NoUpdate:
+        m_updateCheckInProgress = false;
+        refreshUpdateButton();
+        ::MessageBoxW(GetHwnd(), L"当前已经是最新版本。", L"检查更新", MB_OK | MB_ICONINFORMATION);
+        break;
+    case UiEvent::Type::CheckError:
+        m_updateCheckInProgress = false;
+        refreshUpdateButton();
+        ::MessageBoxW(GetHwnd(), event->text.c_str(), L"检查更新失败", MB_OK | MB_ICONWARNING);
+        break;
+    case UiEvent::Type::SchedulerState: {
+        // 事件可能在 UI 忙时排队；处理时重新读取最新状态，避免旧消息覆盖新状态。
+        ShutdownScheduler::State state;
+        {
+            std::lock_guard<std::mutex> lock(m_schedulerMutex);
+            state = m_scheduler.state();
+        }
+        updateState(state);
+        break;
+    }
+    case UiEvent::Type::SchedulerRemaining: {
+        std::int64_t remaining = 0;
+        {
+            std::lock_guard<std::mutex> lock(m_schedulerMutex);
+            remaining = m_scheduler.remainingSeconds();
+        }
+        updateRemaining(remaining);
+        break;
+    }
+    case UiEvent::Type::SchedulerError:
+        ::MessageBoxW(GetHwnd(), event->text.c_str(), L"关机失败", MB_ICONERROR);
+        break;
     }
 }
 
@@ -516,7 +677,8 @@ BOOL MainWindow::OnCommand(WPARAM wparam, LPARAM) {
 
 LRESULT MainWindow::OnNotify(WPARAM wparam, LPARAM lparam) {
     auto *notify = reinterpret_cast<NMHDR *>(lparam);
-    if (notify && (notify->hwndFrom == m_tab || static_cast<int>(notify->idFrom) == IDC_TAB)) {
+    if (notify && notify->code == TCN_SELCHANGE &&
+        (notify->hwndFrom == m_tab || static_cast<int>(notify->idFrom) == IDC_TAB)) {
         setSettingsVisible(TabCtrl_GetCurSel(m_tab) == 1);
         return TRUE;
     }
@@ -526,15 +688,23 @@ LRESULT MainWindow::OnNotify(WPARAM wparam, LPARAM lparam) {
 bool MainWindow::askCloseWithActiveTask() {
     const int choice = ::MessageBoxW(GetHwnd(), L"当前存在活动任务。退出时保留任务吗？", L"退出程序", MB_YESNOCANCEL | MB_ICONQUESTION);
     if (choice == IDCANCEL) return false;
-    if (choice == IDNO) m_scheduler.cancel();
+    if (choice == IDNO) cancelTask();
     return true;
 }
 
-void MainWindow::OnClose() { if (!m_forceQuit && m_scheduler.isActive() && !askCloseWithActiveTask()) return; DestroyWindow(GetHwnd()); }
+void MainWindow::OnClose() {
+    bool active = false;
+    {
+        std::lock_guard<std::mutex> lock(m_schedulerMutex);
+        active = m_scheduler.isActive();
+    }
+    if (!m_forceQuit && active && !askCloseWithActiveTask()) return;
+    DestroyWindow(GetHwnd());
+}
+
 void MainWindow::OnDestroy() {
     m_updateCheckInProgress = false;
-    if (m_schedulerTimerInterval != 0) ::KillTimer(GetHwnd(), TIMER_SCHEDULER);
-    m_schedulerTimerInterval = 0;
+    stopSchedulerWorker();
     m_updateManager.stopAndJoin();
     MSG message{};
     while (::PeekMessageW(&message, GetHwnd(), WM_UI_EVENT, WM_UI_EVENT, PM_REMOVE)) {
@@ -545,15 +715,7 @@ void MainWindow::OnDestroy() {
 }
 
 LRESULT MainWindow::WndProc(UINT msg, WPARAM wparam, LPARAM lparam) {
-    if (msg == WM_TIMER) { if (wparam == TIMER_SCHEDULER) { m_scheduler.tick(); refreshSchedulerTimer(); } return 0; }
-    if (msg == WM_SIZE && wparam == SIZE_MINIMIZED) { ::ShowWindow(GetHwnd(), SW_HIDE); refreshSchedulerTimer(); updateTrayTip(); return 0; }
-    if (msg == WM_NOTIFY) {
-        auto *notify = reinterpret_cast<NMHDR *>(lparam);
-        if (notify && (notify->hwndFrom == m_tab || static_cast<int>(notify->idFrom) == IDC_TAB)) {
-            setSettingsVisible(TabCtrl_GetCurSel(m_tab) == 1);
-            return 0;
-        }
-    }
+    if (msg == WM_SIZE && wparam == SIZE_MINIMIZED) { ::ShowWindow(GetHwnd(), SW_HIDE); updateTrayTip(); return 0; }
     if (msg == WM_TRAY && m_trayCreated) {
         if (lparam == WM_LBUTTONDBLCLK || lparam == WM_LBUTTONUP) showFromTray();
         if (lparam == WM_RBUTTONUP) {
